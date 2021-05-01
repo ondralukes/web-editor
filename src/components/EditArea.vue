@@ -10,8 +10,8 @@ export default {
   data(){
     return{
       ws: null,
-      cursorPosition: 0,
-      lengthBeforeEvent: 0
+      selStart: 0,
+      selEnd: 0
     }
   },
   created() {
@@ -22,64 +22,51 @@ export default {
   },
   methods: {
     beforeInput(){
-      this.cursorPosition = this.$refs.input.selectionEnd;
-      this.lengthBeforeEvent = this.$refs.input.value.length;
+      this.selStart = this.$refs.input.selectionStart;
+      this.selEnd = this.$refs.input.selectionEnd;
     },
     input(e){
       const action = e.inputType;
       switch (action){
         case 'insertText':
         case 'insertFromPaste':
-          console.log(`insert ${e.data} at ${this.cursorPosition}`);
-          this.ws.send(
-              JSON.stringify(
-                  {
-                    action: 'insert',
-                    data: e.data,
-                    pos: this.cursorPosition
-                  }
-              )
-          );
+          console.log(`edit at ${this.selStart} - ${this.selEnd} => ${e.data}`);
+          this.ws.send(JSON.stringify(
+              {
+                start: this.selStart,
+                end: this.selEnd,
+                value: e.data
+              }
+          ));
           break;
+        case 'deleteContentBackward':
         case 'deleteContentForward': {
-          const count = this.lengthBeforeEvent - this.$refs.input.value.length;
-          console.log(`deleted ${count} forward at ${this.cursorPosition}`);
-          this.ws.send(
-              JSON.stringify(
-                  {
-                    action: 'delete',
-                    count: count,
-                    pos: this.cursorPosition
-                  }
-              )
-          );
-          break;
-        }
-        case 'deleteContentBackward': {
-          const count = this.lengthBeforeEvent - this.$refs.input.value.length;
-          console.log(`deleted ${count} backward at ${this.cursorPosition}`);
-          this.ws.send(
-              JSON.stringify(
-                  {
-                    action: 'delete',
-                    count: count,
-                    pos: this.cursorPosition - count
-                  }
-              )
-          );
+          if(this.selStart === this.selEnd){
+            if(e.inputType === 'deleteContentBackward'){
+              this.selStart--;
+            } else {
+              this.selEnd++;
+            }
+          }
+          console.log(`edit at ${this.selStart} - ${this.selEnd} => (empty)`);
+          this.ws.send(JSON.stringify(
+              {
+                start: this.selStart,
+                end: this.selEnd,
+                value: ''
+              }
+          ));
           break;
         }
         case 'insertLineBreak':
-          console.log(`insert new line at ${this.cursorPosition}`);
-          this.ws.send(
-              JSON.stringify(
-                  {
-                    action: 'insert',
-                    data: '\n',
-                    pos: this.cursorPosition
-                  }
-              )
-          );
+          console.log(`edit at ${this.selStart} - ${this.selEnd} => \\n`);
+          this.ws.send(JSON.stringify(
+              {
+                start: this.selStart,
+                end: this.selEnd,
+                value: '\n'
+              }
+          ));
           break;
         default:
           console.log(`Unknown action ${action}`);
@@ -94,21 +81,12 @@ export default {
       let selectionEnd = input.selectionEnd;
       const text = input.value;
       const cmd = JSON.parse(msg);
-      switch (cmd.action){
-        case 'insert':
-          input.value = text.substring(0, cmd.pos) + cmd.data + text.substring(cmd.pos);
-          if(cmd.pos < selectionStart) selectionStart += cmd.data.length;
-          if(cmd.pos < selectionEnd) selectionEnd += cmd.data.length;
-          break;
-        case 'delete':
-          input.value = text.substring(0, cmd.pos) + text.substring(cmd.pos + cmd.count);
-          if(cmd.pos < selectionStart) selectionStart -= cmd.count;
-          if(cmd.pos < selectionEnd) selectionEnd -= cmd.count;
-          break;
-      }
+      input.value = text.substring(0, cmd.start) + cmd.value + text.substring(cmd.end)
+      const lengthDiff = cmd.value - cmd.end + cmd.start;
+      if(cmd.end < selectionStart) selectionStart += lengthDiff;
+      if(cmd.end < selectionEnd) selectionEnd += lengthDiff;
       input.selectionStart = selectionStart;
       input.selectionEnd = selectionEnd;
-      console.log(text);
     }
   }
 }

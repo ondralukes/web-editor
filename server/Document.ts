@@ -14,9 +14,9 @@ export default class Document{
         ws.on('message', (msg) => this.onMessage(ws, msg));
         ws.send(
             JSON.stringify({
-                action: 'insert',
-                pos: 0,
-                data: this.content
+                start: 0,
+                end: 0,
+                value: this.content
             })
         );
     }
@@ -25,14 +25,7 @@ export default class Document{
         if(typeof msg !== 'string') return;
         // Execute command
         const cmd = JSON.parse(msg);
-        switch (cmd.action){
-            case 'insert':
-                this.content = this.content.substring(0, cmd.pos) + cmd.data + this.content.substring(cmd.pos);
-                break;
-            case 'delete':
-                this.content = this.content.substring(0, cmd.pos) + this.content.substring(cmd.pos + cmd.count);
-                break;
-        }
+        this.content = this.content.substring(0, cmd.start) + cmd.value + this.content.substring(cmd.end);
 
         let s = this.connections.first;
         while(s != null){
