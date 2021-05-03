@@ -1,5 +1,6 @@
 <template>
   <div>
+    <h3>{{clients}} connected.</h3>
     <textarea ref="input" @beforeinput="beforeInput" @input="input"></textarea>
   </div>
 </template>
@@ -11,7 +12,8 @@ export default {
     return{
       ws: null,
       selStart: 0,
-      selEnd: 0
+      selEnd: 0,
+      clients: 0
     }
   },
   created() {
@@ -81,6 +83,10 @@ export default {
       let selectionEnd = input.selectionEnd;
       const text = input.value;
       const cmd = JSON.parse(msg);
+      if(cmd.control === 'clients'){
+        this.clients = cmd.value;
+        return;
+      }
       input.value = text.substring(0, cmd.start) + cmd.value + text.substring(cmd.end)
       const lengthDiff = cmd.value - cmd.end + cmd.start;
       if(cmd.end < selectionStart) selectionStart += lengthDiff;
