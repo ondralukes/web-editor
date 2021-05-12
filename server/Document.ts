@@ -6,7 +6,9 @@ export default class Document{
     connections: List<WebSocket> = new List<WebSocket>();
     clients: number = 0;
     constructor() {
-
+        this.content = `// You\'ve just created a fresh new document.
+// Write something awesome!
+`;
     }
 
     connect(ws: WebSocket){

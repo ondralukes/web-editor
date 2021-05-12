@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h3>{{clients}} connected.</h3>
+    <h3>
+      {{code}} / {{clients}} connection(s) /
+      <span class="disconnect" @click="disconnect">Disconnect.</span>
+    </h3>
     <textarea ref="input" @beforeinput="beforeInput" @input="input"></textarea>
   </div>
 </template>
@@ -8,6 +11,8 @@
 <script>
 export default {
   name: 'EditArea',
+  props: ['code'],
+  emit: ['disconnected'],
   data(){
     return{
       ws: null,
@@ -17,7 +22,7 @@ export default {
     }
   },
   created() {
-    this.ws = new WebSocket('ws://localhost:8080');
+    this.ws = new WebSocket(`ws://localhost:8080/${this.code}`);
     this.ws.addEventListener('message', (msg) => {
       this.execute(msg.data);
     })
@@ -93,15 +98,39 @@ export default {
       if(cmd.end < selectionEnd) selectionEnd += lengthDiff;
       input.selectionStart = selectionStart;
       input.selectionEnd = selectionEnd;
+    },
+    disconnect(){
+      this.ws.close();
+      this.$emit('disconnected');
     }
   }
 }
 </script>
 
 <style scoped>
+div{
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+}
 textarea {
   min-height: 50vh;
   width: 100%;
   height: 50vh;
+  border: none;
+  outline: none;
+  flex-grow: 1;
+  resize: none;
+}
+
+.disconnect{
+  color: red;
+}
+
+.disconnect:hover{
+  text-decoration: underline;
+  cursor: pointer;
 }
 </style>

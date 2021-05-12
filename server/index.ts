@@ -7,7 +7,15 @@ app.use(express.static('dist'));
 const server = app.listen(8080);
 const ws = new WebSocket.Server({server});
 
-const doc = new Document();
-ws.on('connection', (client) => {
-    doc.connect(client);
+const docs = new Map();
+ws.on('connection', (client, req) => {
+    if(req.url == null) return;
+    const code = req.url.substring(req.url.indexOf('/'));
+    if(!docs.has(code)){
+        const doc = new Document();
+        docs.set(code, doc);
+        doc.connect(client);
+        return;
+    }
+    docs.get(code).connect(client);
 })
