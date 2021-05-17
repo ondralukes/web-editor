@@ -4,14 +4,11 @@
       {{code}} / {{clients}} connection(s) /
       <span class="disconnect" @click="disconnect">Disconnect.</span>
     </h3>
-    <div class="input">
-      <textarea ref="input"
-                @beforeinput="beforeInput"
-                @scroll="onscroll"
-                @input="input"></textarea>
-      <canvas ref="canvas"></canvas>
-    </div>
-
+    <canvas
+        tabindex="1"
+        ref="canvas"
+        @click="onclick"
+        @keydown="onkeydown"></canvas>
   </div>
 </template>
 
@@ -23,20 +20,19 @@ export default {
   data(){
     return{
       ws: null,
-      selStart: 0,
-      selEnd: 0,
-      foreignCursorPos: 0,
+      content: '',
       clients: 0,
-      scroll: 0,
-      ignoreScroll: false,
       g: null,
       fontWidth: null,
+      lineHeight: 16,
+      cursors: [0]
     }
   },
   mounted() {
     const canvas = this.$refs.canvas;
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
+    this.canvas = canvas;
     this.g = canvas.getContext('2d');
     this.g.font = "16px monospace";
     this.fontWidth = this.g.measureText('a').width;
@@ -46,112 +42,108 @@ export default {
     });
   },
   methods: {
-    beforeInput(){
-      this.selStart = this.$refs.input.selectionStart;
-      this.selEnd = this.$refs.input.selectionEnd;
-    },
-    input(e){
-      const action = e.inputType;
-      switch (action){
-        case 'insertText':
-        case 'insertFromPaste':
-          console.log(`edit at ${this.selStart} - ${this.selEnd} => ${e.data}`);
-          this.ws.send(JSON.stringify(
-              {
-                start: this.selStart,
-                end: this.selEnd,
-                value: e.data
-              }
-          ));
-          break;
-        case 'deleteContentBackward':
-        case 'deleteContentForward': {
-          if(this.selStart === this.selEnd){
-            if(e.inputType === 'deleteContentBackward'){
-              this.selStart--;
-            } else {
-              this.selEnd++;
-            }
+    draw() {
+      this.g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      this.g.font = '16px monospace';
+      this.g.fillStyle = 'green';
+      this.g.textBaseline = 'top';
+      const lines = this.content.split('\n');
+      const lineHeight = this.lineHeight;
+      let lineStart = 0;
+      for (let i = 0; i < lines.length; i++) {
+        this.g.fillText(lines[i], 0, i * lineHeight);
+        for (const c of this.cursors) {
+          if (c - lineStart <= lines[i].length) {
+            this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight, 2, lineHeight);
           }
-          console.log(`edit at ${this.selStart} - ${this.selEnd} => (empty)`);
-          this.ws.send(JSON.stringify(
-              {
-                start: this.selStart,
-                end: this.selEnd,
-                value: ''
-              }
-          ));
-          break;
         }
-        case 'insertLineBreak':
-          console.log(`edit at ${this.selStart} - ${this.selEnd} => \\n`);
-          this.ws.send(JSON.stringify(
-              {
-                start: this.selStart,
-                end: this.selEnd,
-                value: '\n'
-              }
-          ));
-          break;
-        default:
-          console.log(`Unknown action ${action}`);
-          console.log(e);
-          break;
+        lineStart += lines[i].length + 1;
       }
     },
-    execute(msg){
+    onkeydown(e) {
+      if (e.isComposing) return;
+      if (e.key === 'Backspace') {
+        if(this.cursors[0] === 0) return;
+        this.cursors[0] -= 1;
+        this.content = this.content.slice(0,  this.cursors[0]) + this.content.substring(this.cursors[0]+1);
+        this.draw();
+        this.ws.send(JSON.stringify(
+            {
+              start: this.cursors[0],
+              end: this.cursors[0]+1,
+              value: ''
+            }
+        ));
+        return;
+      } else if(e.key === 'Delete'){
+        if(this.cursors[0] === this.content.length) return;
+        this.content = this.content.slice(0,  this.cursors[0]) + this.content.substring(this.cursors[0]+1);
+        this.draw();
+        this.ws.send(JSON.stringify(
+            {
+              start: this.cursors[0],
+              end: this.cursors[0]+1,
+              value: ''
+            }
+        ));
+        return;
+      }
+      let value;
+      if (e.key === 'Enter') {
+        value = '\n';
+      } else {
+        value = e.key;
+      }
+      this.cursors[0] += value.length;
+      const ct = this.content;
+      this.content = ct.substring(0, this.cursors[0]) + value + ct.substring(this.cursors[0]);
+      this.draw();
+      this.ws.send(JSON.stringify(
+          {
+            start: this.cursors[0],
+            end: this.cursors[0],
+            value: value
+          }
+      ));
+    },
+    onclick(e){
+      const row = Math.floor(e.offsetY/this.lineHeight);
+      const col = Math.floor(e.offsetX/this.fontWidth);
+      let rowStart = 0;
+      for(let i = 0; i < row;i++){
+        rowStart = this.content.indexOf('\n', rowStart+1);
+        if(rowStart === -1){
+          this.cursors[0] = this.content.length;
+          this.draw();
+          return;
+        }
+      }
+      if(rowStart+col < this.content.length){
+        this.cursors[0] = rowStart+col;
+      } else {
+        this.cursors[0] = this.content.length;
+      }
+      this.draw();
+    },
+    execute(msg) {
       if (typeof msg !== "string") return;
-      const input = this.$refs.input;
-      let selectionStart = input.selectionStart;
-      let selectionEnd = input.selectionEnd;
-      const text = input.value;
       const cmd = JSON.parse(msg);
-      if(cmd.control === 'clients'){
+      if (cmd.control === 'clients') {
         this.clients = cmd.value;
         return;
       }
-      input.value = text.substring(0, cmd.start) + cmd.value + text.substring(cmd.end)
+      const text = this.content;
       const lengthDiff = cmd.value.length - cmd.end + cmd.start;
-      if(cmd.end < selectionStart) selectionStart += lengthDiff;
-      if(cmd.end < selectionEnd) selectionEnd += lengthDiff;
-      input.selectionStart = selectionStart;
-      input.selectionEnd = selectionEnd;
-      this.foreignCursorPos = cmd.end + lengthDiff;
-      this.ignoreScroll = true;
-      this.$refs.input.scrollTo(0, this.scroll);
-      this.drawCursor(input.value);
+      for(let i = 0;i < this.cursors.length;i++){
+        if(this.cursors[i] >= cmd.end)
+          this.cursors[i] += lengthDiff;
+      }
+      this.content = text.substring(0, cmd.start) + cmd.value + text.substring(cmd.end)
+      this.draw();
     },
-    disconnect(){
+    disconnect() {
       this.ws.close();
       this.$emit('disconnected');
-    },
-    drawCursor(text){
-      let line = 0;
-      let col = 0;
-      for(let i = 0;i<this.foreignCursorPos;i++){
-        col++;
-        if(text[i] === '\n'){
-          line++;
-          col = 0;
-        }
-      }
-      this.g.clearRect(0,0, this.$refs.canvas.width, this.$refs.canvas.height);
-      this.g.fillStyle = 'green';
-      this.g.fillRect(
-          col*this.fontWidth,
-          line*16*1.2 - this.scroll,
-          5,
-          16*1.2
-      );
-    },
-    onscroll(){
-      if(this.ignoreScroll){
-        this.$refs.input.scrollTo(0, this.scroll);
-        this.ignoreScroll = false;
-        return;
-      }
-      this.scroll = this.$refs.input.scrollTop;
-      this.drawCursor(this.$refs.input.value);
     }
   }
 }
@@ -166,34 +158,9 @@ export default {
   padding: 10px;
 }
 
-.input{
-  position: relative;
-  display: block;
-  min-height: 50vh;
-  width: 100%;
-  height: 50vh;
-  flex-grow: 1;
-}
-
-textarea {
-  border: none;
-  outline: none;
-  resize: none;
-  line-height: 1.2em;
-  font-size: 16px;
-}
-
-textarea, canvas{
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-}
-
 canvas{
-  pointer-events: none;
   background-color: transparent;
+  flex-grow: 1;
 }
 
 .disconnect{
