@@ -25,7 +25,7 @@ export default {
       g: null,
       fontWidth: null,
       lineHeight: 16,
-      cursors: [0]
+      cursors: new Map([[0, 0]])
     }
   },
   mounted() {
@@ -45,16 +45,17 @@ export default {
     draw() {
       this.g.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.g.font = '16px monospace';
-      this.g.fillStyle = 'green';
       this.g.textBaseline = 'top';
       const lines = this.content.split('\n');
       const lineHeight = this.lineHeight;
       let lineStart = 0;
       for (let i = 0; i < lines.length; i++) {
+        this.g.fillStyle = '#fafafa';
         this.g.fillText(lines[i], 0, i * lineHeight);
-        for (const c of this.cursors) {
+        for (const [k, c] of this.cursors.entries()) {
           if (c - lineStart <= lines[i].length) {
-            this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight, 2, lineHeight);
+            this.g.fillStyle = k===0?'green':'orange';
+            this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight, 5, lineHeight);
           }
         }
         lineStart += lines[i].length + 1;
@@ -62,28 +63,31 @@ export default {
     },
     onkeydown(e) {
       if (e.isComposing) return;
+      let cursor = this.cursors.get(0);
       if (e.key === 'Backspace') {
-        if(this.cursors[0] === 0) return;
-        this.cursors[0] -= 1;
-        this.content = this.content.slice(0,  this.cursors[0]) + this.content.substring(this.cursors[0]+1);
+        if(cursor === 0) return;
+        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
+        this.moveCursors(cursor, -1);
         this.draw();
         this.ws.send(JSON.stringify(
             {
-              start: this.cursors[0],
-              end: this.cursors[0]+1,
-              value: ''
+              type: 'data',
+              start: cursor,
+              end: cursor+1,
+              data: ''
             }
         ));
         return;
       } else if(e.key === 'Delete'){
-        if(this.cursors[0] === this.content.length) return;
-        this.content = this.content.slice(0,  this.cursors[0]) + this.content.substring(this.cursors[0]+1);
+        if(cursor === this.content.length) return;
+        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
         this.draw();
         this.ws.send(JSON.stringify(
             {
-              start: this.cursors[0],
-              end: this.cursors[0]+1,
-              value: ''
+              type: 'data',
+              start:cursor,
+              end: cursor+1,
+              data: ''
             }
         ));
         return;
@@ -94,17 +98,19 @@ export default {
       } else {
         value = e.key;
       }
-      this.cursors[0] += value.length;
+
       const ct = this.content;
-      this.content = ct.substring(0, this.cursors[0]) + value + ct.substring(this.cursors[0]);
-      this.draw();
+      this.content = ct.substring(0, cursor) + value + ct.substring(cursor);
+      this.moveCursors(cursor, value.length);
       this.ws.send(JSON.stringify(
           {
-            start: this.cursors[0],
-            end: this.cursors[0],
-            value: value
+            type: 'data',
+            start: cursor,
+            end: cursor,
+            data: value
           }
       ));
+      this.draw();
     },
     onclick(e){
       const row = Math.floor(e.offsetY/this.lineHeight);
@@ -113,33 +119,55 @@ export default {
       for(let i = 0; i < row;i++){
         rowStart = this.content.indexOf('\n', rowStart+1);
         if(rowStart === -1){
-          this.cursors[0] = this.content.length;
+          this.cursors.set(0, this.content.length);
           this.draw();
+          this.ws.send(JSON.stringify(
+              {
+                type: 'cursor',
+                pos: this.cursors.get(0)
+              }
+          ));
           return;
         }
       }
       if(rowStart+col < this.content.length){
-        this.cursors[0] = rowStart+col;
+        this.cursors.set(0, rowStart+col);
       } else {
-        this.cursors[0] = this.content.length;
+        this.cursors.set(0, rowStart);
       }
+      this.ws.send(JSON.stringify(
+          {
+            type: 'cursor',
+            pos: this.cursors.get(0)
+          }
+      ));
       this.draw();
     },
     execute(msg) {
       if (typeof msg !== "string") return;
       const cmd = JSON.parse(msg);
-      if (cmd.control === 'clients') {
-        this.clients = cmd.value;
+      if (cmd.type === 'stats') {
+        this.clients = cmd.clients;
         return;
       }
-      const text = this.content;
-      const lengthDiff = cmd.value.length - cmd.end + cmd.start;
-      for(let i = 0;i < this.cursors.length;i++){
-        if(this.cursors[i] >= cmd.end)
-          this.cursors[i] += lengthDiff;
+      if (cmd.type === 'cursor'){
+        this.cursors.set(cmd.sender, cmd.pos);
+        this.draw();
+        return;
       }
-      this.content = text.substring(0, cmd.start) + cmd.value + text.substring(cmd.end)
-      this.draw();
+      if(cmd.type === 'data') {
+        const text = this.content;
+        const lengthDiff = cmd.data.length - cmd.end + cmd.start;
+        this.moveCursors(cmd.end, lengthDiff);
+        this.content = text.substring(0, cmd.start) + cmd.data + text.substring(cmd.end)
+        this.draw();
+      }
+    },
+    moveCursors(pos, diff){
+      for(let [key, value] of this.cursors.entries()){
+        if (value >= pos)
+          this.cursors.set(key, value + diff);
+      }
     },
     disconnect() {
       this.ws.close();
