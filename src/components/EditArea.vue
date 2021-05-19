@@ -4,11 +4,13 @@
       {{code}} / {{clients}} connection(s) /
       <span class="disconnect" @click="disconnect">Disconnect.</span>
     </h3>
-    <canvas
-        tabindex="1"
-        ref="canvas"
-        @click="onclick"
-        @keydown="onkeydown"></canvas>
+    <div class="canvas-container" ref="ccontainer">
+      <canvas
+          tabindex="1"
+          ref="canvas"
+          @click="onclick"
+          @keydown="onkeydown"></canvas>
+    </div>
   </div>
 </template>
 
@@ -30,8 +32,8 @@ export default {
   },
   mounted() {
     const canvas = this.$refs.canvas;
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    canvas.width = this.$refs.ccontainer.offsetWidth;
+    canvas.height = this.$refs.ccontainer.offsetHeight;
     this.canvas = canvas;
     this.g = canvas.getContext('2d');
     this.g.font = "16px monospace";
@@ -40,6 +42,7 @@ export default {
     this.ws.addEventListener('message', (msg) => {
       this.execute(msg.data);
     });
+    window.addEventListener('resize', this.onresize);
   },
   methods: {
     draw() {
@@ -143,6 +146,11 @@ export default {
       ));
       this.draw();
     },
+    onresize(){
+      this.canvas.width = this.$refs.ccontainer.offsetWidth;
+      this.canvas.height = this.$refs.ccontainer.offsetHeight;
+      this.draw();
+    },
     execute(msg) {
       if (typeof msg !== "string") return;
       const cmd = JSON.parse(msg);
@@ -171,6 +179,7 @@ export default {
     },
     disconnect() {
       this.ws.close();
+      window.removeEventListener('resize', this.onresize);
       this.$emit('disconnected');
     }
   }
@@ -186,9 +195,18 @@ export default {
   padding: 10px;
 }
 
+.canvas-container{
+  flex-grow: 1;
+  position: relative;
+}
+
 canvas{
   background-color: transparent;
-  flex-grow: 1;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
 }
 
 .disconnect{
