@@ -9,6 +9,7 @@
           tabindex="1"
           ref="canvas"
           @click="onclick"
+          @wheel="onscroll"
           @keydown="onkeydown"></canvas>
     </div>
   </div>
@@ -25,6 +26,8 @@ export default {
       content: '',
       clients: 0,
       g: null,
+      scroll: 0,
+      maxScroll: 0,
       fontWidth: null,
       lineHeight: 16,
       cursors: new Map([[0, 0]])
@@ -46,23 +49,30 @@ export default {
   },
   methods: {
     draw() {
-      this.g.clearRect(0, 0, this.canvas.width, this.canvas.height);
-      this.g.font = '16px monospace';
-      this.g.textBaseline = 'top';
-      const lines = this.content.split('\n');
-      const lineHeight = this.lineHeight;
-      let lineStart = 0;
-      for (let i = 0; i < lines.length; i++) {
-        this.g.fillStyle = '#fafafa';
-        this.g.fillText(lines[i], 0, i * lineHeight);
-        for (const [k, c] of this.cursors.entries()) {
-          if (c - lineStart <= lines[i].length) {
-            this.g.fillStyle = k===0?'green':'orange';
-            this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight, 5, lineHeight);
+      window.requestAnimationFrame(() => {
+        this.g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.g.font = '16px monospace';
+        this.g.textBaseline = 'top';
+        const lineHeight = this.lineHeight;
+        const lines = this.content.split('\n');
+        const stick = this.scroll === this.maxScroll;
+        this.maxScroll = Math.max(
+            lines.length*lineHeight - this.canvas.height,
+            0);
+        if(this.scroll > this.maxScroll || stick) this.scroll = this.maxScroll;
+        let lineStart = 0;
+        for (let i = 0; i < lines.length; i++) {
+          this.g.fillStyle = '#fafafa';
+          this.g.fillText(lines[i], 0, i * lineHeight - this.scroll);
+          for (const [k, c] of this.cursors.entries()) {
+            if (c - lineStart <= lines[i].length) {
+              this.g.fillStyle = k===0?'green':'orange';
+              this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
+            }
           }
+          lineStart += lines[i].length + 1;
         }
-        lineStart += lines[i].length + 1;
-      }
+      });
     },
     onkeydown(e) {
       if (e.isComposing) return;
@@ -149,6 +159,12 @@ export default {
     onresize(){
       this.canvas.width = this.$refs.ccontainer.offsetWidth;
       this.canvas.height = this.$refs.ccontainer.offsetHeight;
+      this.draw();
+    },
+    onscroll(e){
+      this.scroll += e.deltaY;
+      if(this.scroll < 0) this.scroll = 0;
+      if(this.scroll > this.maxScroll) this.scroll = this.maxScroll;
       this.draw();
     },
     execute(msg) {
