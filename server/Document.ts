@@ -1,19 +1,21 @@
 import WebSocket from "ws";
 import List from "./List";
 import {Command, DataCommand, StatsCommand} from "./Command";
+import Content from "./Content";
 
 export default class Document{
-    content: string = '';
+    content: Content;
     connections: List<Client> = new List<Client>();
     clients: number = 0;
     constructor() {
-        this.content = `// You\'ve just created a fresh new document.
+        this.content = new Content('ctnt');
+        this.content.write(`// You\'ve just created a fresh new document.
 // Write something awesome!
-`;
+`, 0);
     }
     connect(ws: WebSocket){
         const c = new Client(ws, this);
-        c.send(new DataCommand(0, 0, this.content));
+        c.send(new DataCommand(0, 0, this.content.toString()));
         this.connections.add(c);
         this.clients++;
         this.broadcast(new StatsCommand(this.clients));
@@ -25,7 +27,8 @@ export default class Document{
     }
     execute(cmd: Command){
         if(cmd instanceof DataCommand){
-            this.content = this.content.substring(0, cmd.start) + cmd.data + this.content.substring(cmd.end);
+            this.content.replace(cmd.data, cmd.start, cmd.end - cmd.start);
+            // this.content.dump();
         }
         this.broadcast(cmd);
     }
