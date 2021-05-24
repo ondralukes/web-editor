@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import List from "./List";
-import {Command, DataCommand, StatsCommand} from "./Command";
+import {Command, DataCommand, FetchCommand, StatsCommand} from "./Command";
 import Content from "./Content";
 
 export default class Document{
@@ -15,7 +15,6 @@ export default class Document{
     }
     connect(ws: WebSocket){
         const c = new Client(ws, this);
-        c.send(new DataCommand(0, 0, this.content.toString()));
         this.connections.add(c);
         this.clients++;
         this.broadcast(new StatsCommand(this.clients));
@@ -25,12 +24,15 @@ export default class Document{
         this.clients--;
         this.broadcast(new StatsCommand(this.clients));
     }
-    execute(cmd: Command){
+    execute(cmd: Command, sender: Client){
         if(cmd instanceof DataCommand){
             this.content.replace(cmd.data, cmd.start, cmd.end - cmd.start);
-            // this.content.dump();
         }
-        this.broadcast(cmd);
+        if (cmd instanceof FetchCommand){
+            sender.send(new DataCommand(cmd.offset, cmd.offset, this.content.read(cmd.offset, cmd.len)));
+        } else {
+            this.broadcast(cmd);
+        }
     }
 
     private broadcast(cmd: Command){
@@ -61,7 +63,7 @@ class Client{
         const cmd = Command.deserialize(msg);
         if(cmd === null) return;
         cmd.sender = this.id;
-        this.doc.execute(cmd);
+        this.doc.execute(cmd, this);
     }
 
     send(cmd: Command){

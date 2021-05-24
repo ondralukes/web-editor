@@ -1,7 +1,8 @@
 enum Type{
     Cursor = 'cursor',
     Data = 'data',
-    Stats = 'stats'
+    Stats = 'stats',
+    Fetch = 'fetch'
 }
 
 export class Command{
@@ -20,6 +21,8 @@ export class Command{
                 return new DataCommand(obj.start, obj.end, obj.data);
             case Type.Stats:
                 return new StatsCommand(obj.clients);
+            case Type.Fetch:
+                return new FetchCommand(obj.offset, obj.len);
         }
         return null;
     }
@@ -56,5 +59,15 @@ export class DataCommand extends Command{
         this.start = start;
         this.end = end;
         this.data = data;
+    }
+}
+
+export class FetchCommand extends Command{
+    offset: number;
+    len: number;
+    constructor(offset: number, len: number) {
+        super(Type.Fetch);
+        this.offset = offset;
+        this.len = len;
     }
 }

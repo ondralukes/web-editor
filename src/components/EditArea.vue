@@ -30,7 +30,10 @@ export default {
       maxScroll: 0,
       fontWidth: null,
       lineHeight: 16,
-      cursors: new Map([[0, 0]])
+      cursors: new Map([[0, 0]]),
+      loadedEnd: 0,
+      lastRequested: 0,
+      drawSilently: false
     }
   },
   mounted() {
@@ -45,17 +48,27 @@ export default {
     this.ws.addEventListener('message', (msg) => {
       this.execute(msg.data);
     });
+    this.ws.addEventListener('open', () => {
+      this.ws.send(JSON.stringify(
+          {
+            type: 'fetch',
+            offset: 0,
+            len: 128
+          }
+      ));
+    });
     window.addEventListener('resize', this.onresize);
   },
   methods: {
-    draw() {
+    draw(dontStickScroll) {
       window.requestAnimationFrame(() => {
         this.g.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.g.font = '16px monospace';
         this.g.textBaseline = 'top';
         const lineHeight = this.lineHeight;
         const lines = this.content.split('\n');
-        const stick = this.scroll === this.maxScroll;
+        const stick = this.scroll === this.maxScroll && !dontStickScroll;
+        this.drawSilently = false;
         this.maxScroll = Math.max(
             lines.length*lineHeight - this.canvas.height,
             0);
@@ -71,6 +84,17 @@ export default {
             }
           }
           lineStart += lines[i].length + 1;
+        }
+        if(this.loadedEnd !== this.lastRequested && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
+          console.log(`${(lines.length-1)*lineHeight-this.scroll} < ${this.canvas.height}`);
+          this.ws.send(JSON.stringify(
+              {
+                type: 'fetch',
+                offset: this.loadedEnd,
+                len: 128
+              }
+          ));
+          this.lastRequested = this.loadedEnd;
         }
       });
     },
@@ -180,11 +204,13 @@ export default {
         return;
       }
       if(cmd.type === 'data') {
+        if(cmd.start > this.loadedEnd) return;
         const text = this.content;
         const lengthDiff = cmd.data.length - cmd.end + cmd.start;
+        this.loadedEnd += lengthDiff;
         this.moveCursors(cmd.end, lengthDiff);
         this.content = text.substring(0, cmd.start) + cmd.data + text.substring(cmd.end)
-        this.draw();
+        this.draw(cmd.start === this.lastRequested);
       }
     },
     moveCursors(pos, diff){
