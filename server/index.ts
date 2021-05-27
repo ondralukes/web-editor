@@ -10,9 +10,9 @@ const ws = new WebSocket.Server({server});
 const docs = new Map();
 ws.on('connection', (client, req) => {
     if(req.url == null) return;
-    const code = req.url.substring(req.url.indexOf('/'));
+    const code = req.url.substring(req.url.indexOf('/')+1);
     if(!docs.has(code)){
-        const doc = new Document();
+        const doc = new Document(code);
         docs.set(code, doc);
         doc.connect(client);
         return;

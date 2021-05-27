@@ -2,7 +2,9 @@ enum Type{
     Cursor = 'cursor',
     Data = 'data',
     Stats = 'stats',
-    Fetch = 'fetch'
+    Fetch = 'fetch',
+    ToggleDebug = 'toggle debug',
+    Debug = 'debug'
 }
 
 export class Command{
@@ -23,6 +25,8 @@ export class Command{
                 return new StatsCommand(obj.clients);
             case Type.Fetch:
                 return new FetchCommand(obj.offset, obj.len);
+            case Type.ToggleDebug:
+                return new ToggleDebugCommand(obj.value);
         }
         return null;
     }
@@ -50,10 +54,16 @@ export class StatsCommand extends Command{
     }
 }
 
+export enum DataCommandFlags{
+    Load = 'load',
+    LoadLast = 'load last'
+}
+
 export class DataCommand extends Command{
     start: number;
     end: number;
     data: string;
+    flags?: DataCommandFlags
     constructor(start: number, end: number, data: string) {
         super(Type.Data);
         this.start = start;
@@ -69,5 +79,27 @@ export class FetchCommand extends Command{
         super(Type.Fetch);
         this.offset = offset;
         this.len = len;
+    }
+}
+
+export class ToggleDebugCommand extends Command{
+    value: boolean;
+    constructor(value: boolean) {
+        super(Type.ToggleDebug);
+        this.value = value;
+    }
+}
+
+export class DebugCommand extends Command{
+    length: number;
+    totalChunks: number;
+    loadedChunks: number;
+    chunkSize: number;
+    constructor(length: number, totalChunks: number, loadedChunks: number, chunkSize: number) {
+        super(Type.Debug);
+        this.length = length;
+        this.totalChunks = totalChunks;
+        this.loadedChunks = loadedChunks;
+        this.chunkSize = chunkSize;
     }
 }

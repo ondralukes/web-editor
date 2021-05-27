@@ -1,17 +1,23 @@
 import WebSocket from "ws";
 import List from "./List";
-import {Command, DataCommand, FetchCommand, StatsCommand} from "./Command";
+import {
+    Command,
+    DataCommand,
+    DataCommandFlags,
+    DebugCommand,
+    FetchCommand,
+    StatsCommand,
+    ToggleDebugCommand
+} from "./Command";
 import Content from "./Content";
 
 export default class Document{
     content: Content;
     connections: List<Client> = new List<Client>();
     clients: number = 0;
-    constructor() {
-        this.content = new Content('ctnt');
-        this.content.write(`// You\'ve just created a fresh new document.
-// Write something awesome!
-`, 0);
+    constructor(code: string) {
+        this.content = new Content(code);
+        setInterval(() => this.sendDebug(), 500);
     }
     connect(ws: WebSocket){
         const c = new Client(ws, this);
@@ -25,14 +31,29 @@ export default class Document{
         this.broadcast(new StatsCommand(this.clients));
     }
     execute(cmd: Command, sender: Client){
+        // Server-only commands
+        if (cmd instanceof FetchCommand){
+            const resp = new DataCommand(cmd.offset, cmd.offset, this.content.read(cmd.offset, cmd.len));
+            if(cmd.offset+cmd.len >= this.content.length){
+                resp.flags = DataCommandFlags.LoadLast;
+            } else {
+                resp.flags = DataCommandFlags.Load;
+            }
+            sender.send(resp);
+            return;
+        }
+
+        if(cmd instanceof ToggleDebugCommand){
+            console.log('togg');
+            sender.debug = cmd.value as boolean;
+            return;
+        }
+
+        // Broadcasted commands
         if(cmd instanceof DataCommand){
             this.content.replace(cmd.data, cmd.start, cmd.end - cmd.start);
         }
-        if (cmd instanceof FetchCommand){
-            sender.send(new DataCommand(cmd.offset, cmd.offset, this.content.read(cmd.offset, cmd.len)));
-        } else {
-            this.broadcast(cmd);
-        }
+        this.broadcast(cmd);
     }
 
     private broadcast(cmd: Command){
@@ -43,11 +64,27 @@ export default class Document{
             s = s.next;
         }
     }
+
+    private sendDebug(){
+        const cmd = new DebugCommand(
+            this.content.length,
+            this.content.totalChunks,
+            this.content.loadedChunks,
+            this.content.chunkSize
+        );
+        let s = this.connections.first;
+        while(s != null){
+            if(s.value.debug)
+                s.value.send(cmd);
+            s = s.next;
+        }
+    }
 }
 
 class Client{
     private readonly ws: WebSocket;
     private readonly doc: Document;
+    debug: boolean = false;
     readonly id: number;
     constructor(ws: WebSocket, doc: Document) {
         this.ws = ws;

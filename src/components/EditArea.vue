@@ -1,9 +1,29 @@
 <template>
   <div class="editarea-container">
-    <h3>
-      {{code}} / {{clients}} connection(s) /
-      <span class="disconnect" @click="disconnect">Disconnect.</span>
-    </h3>
+    <div>
+      <h3>
+        {{code}} / {{clients}} connection(s) /
+        <span class="disconnect" @click="disconnect">Disconnect</span>
+        /
+        <span class="debug" @click="toggleDebug">Debug</span>
+      </h3>
+      <div v-if="debug" class="debug-info">
+        Last received: {{ debugInfo.lastCommand }}
+        <br>
+        Loaded length: {{ loadedLength }}
+        <br>
+        Server:
+        <br>
+        length {{debugInfo.length}}
+        <br>
+        chunk size {{debugInfo.chunkSize}}
+        <br>
+        {{debugInfo.totalChunks}} chunks, {{debugInfo.loadedChunks}} loaded
+        <br>
+        avg. chunk utilization: {{ ((debugInfo.length/debugInfo.totalChunks)/debugInfo.chunkSize*100).toFixed(2)}}%
+        <br>
+      </div>
+    </div>
     <div class="canvas-container" ref="ccontainer">
       <canvas
           tabindex="1"
@@ -31,9 +51,16 @@ export default {
       fontWidth: null,
       lineHeight: 16,
       cursors: new Map([[0, 0]]),
-      loadedEnd: 0,
-      lastRequested: 0,
-      drawSilently: false
+      loadedLength: 0,
+      canLoad: true,
+      debug: false,
+      debugInfo: {
+        lastCommand: '',
+        totalChunks: 0,
+        loadedChunks: 0,
+        chunkSize: 0,
+        length: 0,
+      }
     }
   },
   mounted() {
@@ -68,7 +95,6 @@ export default {
         const lineHeight = this.lineHeight;
         const lines = this.content.split('\n');
         const stick = this.scroll === this.maxScroll && !dontStickScroll;
-        this.drawSilently = false;
         this.maxScroll = Math.max(
             lines.length*lineHeight - this.canvas.height,
             0);
@@ -85,16 +111,15 @@ export default {
           }
           lineStart += lines[i].length + 1;
         }
-        if(this.loadedEnd !== this.lastRequested && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
-          console.log(`${(lines.length-1)*lineHeight-this.scroll} < ${this.canvas.height}`);
+        if(this.canLoad && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
           this.ws.send(JSON.stringify(
               {
                 type: 'fetch',
-                offset: this.loadedEnd,
+                offset: this.loadedLength,
                 len: 128
               }
           ));
-          this.lastRequested = this.loadedEnd;
+          this.canLoad = false;
         }
       });
     },
@@ -103,21 +128,24 @@ export default {
       let cursor = this.cursors.get(0);
       if (e.key === 'Backspace') {
         if(cursor === 0) return;
-        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
-        this.moveCursors(cursor, -1);
+        this.content = this.content.slice(0,  cursor-1) + this.content.substring(cursor);
+        this.loadedLength -= 1;
+        this.lastRequested -= 1;
         this.draw();
         this.ws.send(JSON.stringify(
             {
               type: 'data',
-              start: cursor,
-              end: cursor+1,
+              start: cursor-1,
+              end: cursor,
               data: ''
             }
         ));
+        this.moveCursors(cursor, -1);
         return;
       } else if(e.key === 'Delete'){
         if(cursor === this.content.length) return;
         this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
+        this.loadedLength -= 1;
         this.draw();
         this.ws.send(JSON.stringify(
             {
@@ -125,6 +153,24 @@ export default {
               start:cursor,
               end: cursor+1,
               data: ''
+            }
+        ));
+        return;
+      } else if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+        let c = this.cursors.get(0);
+        if(e.key === 'ArrowLeft'){
+          if(c === 0) return;
+          c--;
+        } else if(e.key === 'ArrowRight'){
+          if(c === this.content.length) return;
+          c++;
+        }
+        this.cursors.set(0, c);
+        this.draw();
+        this.ws.send(JSON.stringify(
+            {
+              type: 'cursor',
+              pos: this.cursors.get(0)
             }
         ));
         return;
@@ -138,6 +184,7 @@ export default {
 
       const ct = this.content;
       this.content = ct.substring(0, cursor) + value + ct.substring(cursor);
+      this.loadedLength += value.length;
       this.moveCursors(cursor, value.length);
       this.ws.send(JSON.stringify(
           {
@@ -150,11 +197,12 @@ export default {
       this.draw();
     },
     onclick(e){
-      const row = Math.floor(e.offsetY/this.lineHeight);
+      const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
       const col = Math.floor(e.offsetX/this.fontWidth);
       let rowStart = 0;
+      let rowEnd = this.content.indexOf('\n', rowStart+1);
+      if(rowEnd === -1) rowEnd = this.content.length;
       for(let i = 0; i < row;i++){
-        rowStart = this.content.indexOf('\n', rowStart+1);
         if(rowStart === -1){
           this.cursors.set(0, this.content.length);
           this.draw();
@@ -166,11 +214,14 @@ export default {
           ));
           return;
         }
+        rowStart = rowEnd;
+        rowEnd = this.content.indexOf('\n', rowStart+1);
+        if(rowEnd === -1) rowEnd = this.content.length;
       }
-      if(rowStart+col < this.content.length){
+      if(rowStart+col < rowEnd){
         this.cursors.set(0, rowStart+col);
       } else {
-        this.cursors.set(0, rowStart);
+        this.cursors.set(0, rowEnd);
       }
       this.ws.send(JSON.stringify(
           {
@@ -194,9 +245,20 @@ export default {
     execute(msg) {
       if (typeof msg !== "string") return;
       const cmd = JSON.parse(msg);
+      if (this.debug && cmd.type !== 'debug'){
+        this.debugInfo.lastCommand = msg;
+      }
+
       if (cmd.type === 'stats') {
         this.clients = cmd.clients;
         return;
+      }
+
+      if(cmd.type === 'debug'){
+        this.debugInfo.totalChunks = cmd.totalChunks;
+        this.debugInfo.loadedChunks = cmd.loadedChunks;
+        this.debugInfo.length = cmd.length;
+        this.debugInfo.chunkSize = cmd.chunkSize;
       }
       if (cmd.type === 'cursor'){
         this.cursors.set(cmd.sender, cmd.pos);
@@ -204,13 +266,16 @@ export default {
         return;
       }
       if(cmd.type === 'data') {
-        if(cmd.start > this.loadedEnd) return;
+        if(cmd.start > this.loadedLength) return;
         const text = this.content;
         const lengthDiff = cmd.data.length - cmd.end + cmd.start;
-        this.loadedEnd += lengthDiff;
+        if(cmd.flags === 'load'){
+          this.canLoad = true;
+        }
+        this.loadedLength += lengthDiff;
         this.moveCursors(cmd.end, lengthDiff);
         this.content = text.substring(0, cmd.start) + cmd.data + text.substring(cmd.end)
-        this.draw(cmd.start === this.lastRequested);
+        this.draw(cmd.flags === 'load' || cmd.flags === 'load last');
       }
     },
     moveCursors(pos, diff){
@@ -223,6 +288,16 @@ export default {
       this.ws.close();
       window.removeEventListener('resize', this.onresize);
       this.$emit('disconnected');
+    },
+    toggleDebug(){
+      this.debug = !this.debug;
+      this.ws.send(JSON.stringify(
+          {
+            type: 'toggle debug',
+            value: this.debug
+          }
+      ));
+      this.$nextTick(() => this.onresize());
     }
   }
 }
@@ -255,8 +330,16 @@ canvas{
   color: red;
 }
 
-.disconnect:hover{
+.debug{
+  color: #424242;
+}
+
+.disconnect:hover, .debug:hover{
   text-decoration: underline;
   cursor: pointer;
+}
+
+.debug-info{
+  padding: 10px 0;
 }
 </style>

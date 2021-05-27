@@ -3,13 +3,18 @@ import fs from 'fs';
 export default class Content {
     readonly name: string;
     public length: number = 0;
-    private readonly chunkSize = 64;
+    public readonly chunkSize = 256;
     private chunks: Map<number, Chunk> = new Map<number, Chunk>();
     private chunkLengths: Array<number> = [];
 
     constructor(name: string) {
         this.name = name;
-        if (!fs.existsSync(name)) fs.mkdirSync(name);
+        if (!fs.existsSync('files')) fs.mkdirSync('files');
+        if (!fs.existsSync(`files/${name}`)) fs.mkdirSync(`files/${name}`);
+        if(fs.existsSync(`files/${name}/len`)){
+            this.length = parseInt(fs.readFileSync(`files/${name}/len`).toString('utf-8'));
+        }
+        setInterval(() => this.cleanUp(), 1000);
     }
 
     read(offset: number, length: number) {
@@ -65,18 +70,25 @@ export default class Content {
                 n++;
             }
         } else {
-            let [n, chunkOffset] = this.getChunkOffset(offset + replaceLength);
+            let [n, chunkOffset] = this.getChunkOffset(offset);
             const currentChunk = this.getChunk(n);
             const overflow = this.chunkLengths[n] + diff - this.chunkSize;
             if (overflow > 0) {
-                this.insertChunk(n + 1);
                 const overflowBuffer = Buffer.allocUnsafe(overflow);
                 currentChunk.copyTo(
                     overflowBuffer,
                     0,
                     this.chunkLengths[n] - overflow,
                     this.chunkLengths[n]);
-                const overflowChunk = this.getChunk(n + 1);
+                let overflowChunk;
+                // Try to put overflow to next chunk
+                if(this.chunkSize - this.chunkLengths[n+1] >= overflow){
+                    overflowChunk = this.getChunk(n+1);
+                    overflowChunk.shift(0, overflow);
+                } else {
+                    this.insertChunk(n + 1);
+                    overflowChunk = this.getChunk(n + 1);
+                }
                 overflowChunk.write(overflowBuffer.toString('utf-8'), 0, 0, true);
                 this.chunkLengths[n + 1] = overflowChunk.length;
             }
@@ -111,11 +123,21 @@ export default class Content {
         console.log(this.read(0, this.length));
     }
 
+    get totalChunks(){
+        return this.chunkLengths.length;
+    }
+
+    get loadedChunks(){
+        return this.chunks.size;
+    }
+
     insertChunk(n: number) {
-        for (let i = this.chunkLengths.length; i >= n; i--) {
+        console.log(`Inserted ${this.name}/${n}`);
+        for (let i = this.chunkLengths.length-1; i >= n; i--) {
             const c = this.chunks.get(i);
             if (typeof c === 'undefined') {
                 this.chunks.delete(i + 1);
+                fs.renameSync(`files/${this.name}/${i}`, `files/${this.name}/${i+1}`)
             } else {
                 this.chunks.set(i + 1, c);
             }
@@ -124,10 +146,28 @@ export default class Content {
         this.chunkLengths.splice(n, 0, 0);
     }
 
+    cleanUp(){
+        for(const [n, chunk] of this.chunks){
+            if(chunk.isExpired()){
+                console.log(`Unloaded ${this.name}/${n}`);
+                const chunkFile = `files/${this.name}/${n}`;
+                const file = fs.openSync(chunkFile, 'w');
+                fs.writeSync(file, chunk.buf, 0, chunk.length);
+                fs.closeSync(file);
+                this.chunks.delete(n);
+            }
+        }
+        fs.writeFileSync(`files/${this.name}/len`, this.length.toString());
+    }
+
     private getChunkOffset(offset: number) {
         let n = 0;
         while (offset > this.chunkLengths[n]) {
             offset -= this.chunkLengths[n];
+            n++;
+        }
+        if(offset == this.chunkSize){
+            offset = 0;
             n++;
         }
         return [n, offset];
@@ -143,12 +183,15 @@ export default class Content {
             return chunk;
         }
         const buf = Buffer.allocUnsafe(this.chunkSize);
-        const chunkFile = `${this.name}/${n}`;
+        const chunkFile = `files/${this.name}/${n}`;
         if (fs.existsSync(chunkFile)) {
+            console.log(`Loaded ${this.name}/${n}`);
             const file = fs.openSync(chunkFile, 'r');
             const read = fs.readSync(file, buf);
+            fs.closeSync(file);
             chunk = new Chunk(buf, read);
         } else {
+            console.log(`Created ${this.name}/${n}`);
             chunk = new Chunk(buf, 0);
         }
         this.chunks.set(n, chunk);
@@ -158,18 +201,22 @@ export default class Content {
 
 class Chunk {
     length: number;
-    private readonly buf: Buffer;
+    lastUsed: number;
+    readonly buf: Buffer;
 
     constructor(buf: Buffer, length: number) {
         this.buf = buf;
         this.length = length;
+        this.lastUsed = Date.now();
     }
 
     copyTo(buf: Buffer, targetOffset: number, sourceOffset: number, sourceEnd: number) {
+        this.lastUsed = Date.now();
         return this.buf.copy(buf, targetOffset, sourceOffset, Math.min(this.length, sourceEnd));
     }
 
     write(data: string, targetOffset: number, sourceOffset: number, canExtend: boolean) {
+        this.lastUsed = Date.now();
         let length = canExtend ? data.length : this.length - targetOffset;
         if (length > this.buf.length - targetOffset)
             length = this.buf.length - targetOffset;
@@ -180,6 +227,7 @@ class Chunk {
     }
 
     remove(start: number, length: number) {
+        this.lastUsed = Date.now();
         if (start + length > this.length) {
             length = this.length - start;
         }
@@ -190,6 +238,7 @@ class Chunk {
     }
 
     shift(offset: number, shift: number) {
+        this.lastUsed = Date.now();
         this.buf.copy(this.buf, offset + shift, offset, this.length);
         this.length += shift;
         if (this.length > this.buf.length)
@@ -197,6 +246,11 @@ class Chunk {
     }
 
     toString() {
+        this.lastUsed = Date.now();
         return this.buf.toString('utf-8', 0, this.length);
+    }
+
+    isExpired(){
+        return Date.now() - this.lastUsed > 10000;
     }
 }
