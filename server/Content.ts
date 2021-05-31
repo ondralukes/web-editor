@@ -1,4 +1,5 @@
 import fs from 'fs';
+import {Writable} from 'stream';
 
 export default class Content {
     readonly name: string;
@@ -120,6 +121,13 @@ export default class Content {
         }
         if (offset + data.length > this.length)
             this.length = offset + data.length;
+    }
+
+    writeToStream(stream: Writable){
+        for(let i = 0;i<this.chunkLengths.length;i++){
+            const chunk = this.getChunk(i);
+            stream.write(chunk.buf.subarray(0, this.chunkLengths[i]));
+        }
     }
 
     dump() {

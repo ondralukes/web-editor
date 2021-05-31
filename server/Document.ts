@@ -10,6 +10,7 @@ import {
     ToggleDebugCommand
 } from "./Command";
 import Content from "./Content";
+import {Writable} from "stream";
 
 export default class Document{
     content: Content;
@@ -45,7 +46,6 @@ export default class Document{
         }
 
         if(cmd instanceof ToggleDebugCommand){
-            console.log('togg');
             sender.debug = cmd.value as boolean;
             return;
         }
@@ -55,6 +55,10 @@ export default class Document{
             this.content.replace(cmd.data, cmd.start, cmd.end - cmd.start);
         }
         this.broadcast(cmd);
+    }
+
+    writeToStream(stream: Writable){
+        this.content.writeToStream(stream);
     }
 
     private broadcast(cmd: Command){

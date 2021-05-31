@@ -5,6 +5,8 @@
         {{code}} / {{clients}} connection(s) /
         <span class="disconnect" @click="disconnect">Disconnect</span>
         /
+        <a class="download" :href="`/download/${code}`" download>Download</a>
+        /
         <span class="debug" @click="toggleDebug">Debug</span>
       </h3>
       <div v-if="debug" class="debug-info">
@@ -334,7 +336,11 @@ canvas{
   color: #424242;
 }
 
-.disconnect:hover, .debug:hover{
+.download{
+  text-decoration: none;
+}
+
+.disconnect:hover, .debug:hover, .download:hover{
   text-decoration: underline;
   cursor: pointer;
 }
