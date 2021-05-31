@@ -7,6 +7,8 @@ export default class Content {
     public readonly chunkSize = 256;
     private chunks: Map<number, Chunk> = new Map<number, Chunk>();
     private chunkLengths: Array<number> = [];
+    private readonly cleanUpInterval: NodeJS.Timeout;
+    private readonly consolidateInterval: NodeJS.Timeout;
 
     constructor(name: string) {
         this.name = name;
@@ -18,8 +20,15 @@ export default class Content {
         } else {
             console.log(`Created new ${this.name}`);
         }
-        setInterval(() => this.cleanUp(), 1000);
-        setInterval(() => this.consolidate(), 30000);
+        this.cleanUpInterval = setInterval(() => this.cleanUp(), 1000);
+        this.consolidateInterval = setInterval(() => this.consolidate(), 30000);
+    }
+
+    destroy(){
+        clearInterval(this.cleanUpInterval);
+        clearInterval(this.consolidateInterval);
+        if(fs.existsSync(`files/${this.name}`))
+            fs.rmSync(`files/${this.name}`, {recursive: true});
     }
 
     read(buffer: Buffer, offset: number, length: number) {

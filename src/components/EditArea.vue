@@ -1,13 +1,24 @@
 <template>
   <div class="editarea-container">
+    <div class="disconnect-warning" v-if="disconnectPrompt">
+      <h1>Warning</h1>
+      Abandoned documents will be deleted after some time. Make sure you've downloaded all you need.
+      <br>
+      <h3>
+        <span class="action disconnect" @click="disconnect">Disconnect</span>
+        /
+        <span class="action" @click="disconnectPrompt = false;">Go back</span>
+      </h3>
+
+    </div>
     <div>
       <h3>
         {{code}} / {{clients}} connection(s) /
-        <span class="disconnect" @click="disconnect">Disconnect</span>
+        <span class="action disconnect" @click="disconnectPrompt = true;">Disconnect</span>
         /
-        <a class="download" :href="`/download/${code}`" download>Download</a>
+        <a class="action download" :href="`/download/${code}`" download>Download</a>
         /
-        <span class="debug" @click="toggleDebug">Debug</span>
+        <span class="action debug" @click="toggleDebug">Debug</span>
       </h3>
       <div v-if="debug" class="debug-info">
         Last received: {{ debugInfo.lastCommand }}
@@ -62,7 +73,8 @@ export default {
         loadedChunks: 0,
         chunkSize: 0,
         length: 0,
-      }
+      },
+      disconnectPrompt: false
     }
   },
   mounted() {
@@ -332,15 +344,26 @@ canvas{
   color: red;
 }
 
+.disconnect-warning{
+  text-align: center;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  background-color: inherit;
+}
+
 .debug{
   color: #424242;
 }
 
-.download{
+.action{
   text-decoration: none;
 }
 
-.disconnect:hover, .debug:hover, .download:hover{
+.action:hover{
   text-decoration: underline;
   cursor: pointer;
 }

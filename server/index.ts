@@ -1,7 +1,10 @@
 import WebSocket from "ws";
 import Document from "./Document";
 import {Request, Response} from "express";
+import fs from "fs";
 
+if(fs.existsSync('files'))
+    fs.rmSync('files', {recursive: true});
 const express = require('express');
 const app = express();
 app.use(express.static('dist'));
@@ -32,3 +35,13 @@ app.get('/download/:code', (req: Request, res: Response) => {
     doc.writeToStream(res);
     res.end();
 });
+
+setInterval(() => {
+    for(const [code, doc] of docs){
+        if(doc.clients === 0 && Date.now() - doc.lastAccessed > 10000){
+            console.log(`Expired ${code}`);
+            doc.destroy();
+            docs.delete(code);
+        }
+    }
+}, 10000);

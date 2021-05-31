@@ -16,9 +16,14 @@ export default class Document{
     content: Content;
     connections: List<Client> = new List<Client>();
     clients: number = 0;
+    lastAccessed: number;
     constructor(code: string) {
         this.content = new Content(code);
         setInterval(() => this.sendDebug(), 500);
+        this.lastAccessed = Date.now();
+    }
+    destroy(){
+        this.content.destroy();
     }
     connect(ws: WebSocket){
         const c = new Client(ws, this);
@@ -29,6 +34,7 @@ export default class Document{
     disconnect(client: Client){
         this.connections.remove(client);
         this.clients--;
+        this.lastAccessed = Date.now();
         this.broadcast(new StatsCommand(this.clients));
     }
     execute(cmd: Command, sender: Client){
