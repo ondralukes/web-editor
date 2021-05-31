@@ -13,26 +13,34 @@ export default class Content {
         if (!fs.existsSync(`files/${name}`)) fs.mkdirSync(`files/${name}`);
         if(fs.existsSync(`files/${name}/len`)){
             this.length = parseInt(fs.readFileSync(`files/${name}/len`).toString('utf-8'));
+            console.log(`Loaded ${this.name}, length ${this.length}`);
+        } else {
+            console.log(`Created new ${this.name}`);
         }
         setInterval(() => this.cleanUp(), 1000);
+        setInterval(() => this.consolidate(), 30000);
     }
 
-    read(offset: number, length: number) {
-        if (offset >= this.length) return '';
-        if (offset + length > this.length) length = this.length - offset;
+    read(buffer: Buffer, offset: number, length: number) {
         let [n, firstChunkOffset] = this.getChunkOffset(offset);
-        const result = Buffer.allocUnsafe(length);
         let copied = 0;
-        copied += this.getChunk(n).copyTo(result, 0, firstChunkOffset, firstChunkOffset + length);
+        copied += this.getChunk(n).copyTo(buffer, 0, firstChunkOffset, firstChunkOffset + length);
         while (copied != length) {
             n++;
-            copied += this.getChunk(n).copyTo(result, copied, 0, length - copied);
+            copied += this.getChunk(n).copyTo(buffer, copied, 0, length - copied);
         }
-        return result.toString('utf-8');
+    }
+
+    readString(offset: number, length: number){
+        if (offset >= this.length) return '';
+        if (offset + length > this.length) length = this.length - offset;
+        const buf = Buffer.allocUnsafe(length);
+        this.read(buf, offset, length)
+        return buf.toString('utf-8');
     }
 
     toString(){
-        return this.read(0, this.length);
+        return this.readString(0, this.length);
     }
 
     // Replace does not support data longer than chunk size
@@ -50,14 +58,14 @@ export default class Content {
             let [n, firstChunkOffset] = this.getChunkOffset(offset);
             let written = 0;
             let c = this.getChunk(n);
-            let chunkOffset = c.write(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
+            let chunkOffset = c.writeString(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
             written += chunkOffset;
             chunkOffset += firstChunkOffset;
             this.chunkLengths[n] = c.length;
             while (written != data.length) {
                 n++;
                 const c = this.getChunk(n);
-                chunkOffset = c.write(data, 0, written, !this.chunkExists(n + 1));
+                chunkOffset = c.writeString(data, 0, written, !this.chunkExists(n + 1));
                 written += chunkOffset;
                 this.chunkLengths[n] = c.length;
             }
@@ -89,7 +97,7 @@ export default class Content {
                     this.insertChunk(n + 1);
                     overflowChunk = this.getChunk(n + 1);
                 }
-                overflowChunk.write(overflowBuffer.toString('utf-8'), 0, 0, true);
+                overflowChunk.writeString(overflowBuffer.toString('utf-8'), 0, 0, true);
                 this.chunkLengths[n + 1] = overflowChunk.length;
             }
             currentChunk.shift(chunkOffset, diff);
@@ -102,12 +110,12 @@ export default class Content {
         let [n, firstChunkOffset] = this.getChunkOffset(offset);
         let written = 0;
         let c = this.getChunk(n);
-        written += c.write(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
+        written += c.writeString(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
         this.chunkLengths[n] = c.length;
         while (written != data.length) {
             n++;
             const c = this.getChunk(n);
-            written += c.write(data, 0, written, !this.chunkExists(n + 1));
+            written += c.writeString(data, 0, written, !this.chunkExists(n + 1));
             this.chunkLengths[n] = c.length;
         }
         if (offset + data.length > this.length)
@@ -118,9 +126,9 @@ export default class Content {
         console.log(`Content ${this.name}, length ${this.length}`);
         for (let i = 0; i < this.chunkLengths.length; i++) {
             const len = this.chunkLengths[i];
-            console.log(`chunk ${i}, len=${len}: ${this.getChunk(i).toString()}`);
+            const val = this.getChunk(i).toString();
+            console.log(`chunk ${i}, len=${len}: ${val.substring(0, 10)}...${val.slice(-10)}`);
         }
-        console.log(this.read(0, this.length));
     }
 
     get totalChunks(){
@@ -160,6 +168,29 @@ export default class Content {
         fs.writeFileSync(`files/${this.name}/len`, this.length.toString());
     }
 
+    consolidate(){
+        const prev = this.chunkLengths.length;
+        const buffer = Buffer.allocUnsafe(this.chunkSize);
+        let offset = 0;
+        let chunk = 0;
+        while(offset != this.length) {
+            const len = Math.min(this.chunkSize, this.length-offset);
+            this.read(buffer, offset, len);
+            this.getChunk(chunk).write(buffer, 0, 0, len);
+            this.chunkLengths[chunk] = len;
+            offset += len;
+            chunk++;
+        }
+        for (let i = chunk; i < this.chunkLengths.length; i++) {
+            const filename = `files/${this.name}/${i}`;
+            if(fs.existsSync(filename))
+                fs.unlinkSync(filename);
+            this.chunks.delete(i);
+        }
+        this.chunkLengths.splice(chunk);
+        console.log(`Consolidated ${this.name} : ${prev} => ${chunk}`);
+    }
+
     private getChunkOffset(offset: number) {
         let n = 0;
         while (offset > this.chunkLengths[n]) {
@@ -195,6 +226,7 @@ export default class Content {
             chunk = new Chunk(buf, 0);
         }
         this.chunks.set(n, chunk);
+        this.chunkLengths[n] = chunk.length;
         return chunk;
     }
 }
@@ -215,7 +247,7 @@ class Chunk {
         return this.buf.copy(buf, targetOffset, sourceOffset, Math.min(this.length, sourceEnd));
     }
 
-    write(data: string, targetOffset: number, sourceOffset: number, canExtend: boolean) {
+    writeString(data: string, targetOffset: number, sourceOffset: number, canExtend: boolean) {
         this.lastUsed = Date.now();
         let length = canExtend ? data.length : this.length - targetOffset;
         if (length > this.buf.length - targetOffset)
@@ -224,6 +256,12 @@ class Chunk {
         if (targetOffset + written > this.length)
             this.length = targetOffset + written;
         return written;
+    }
+
+    write(buffer: Buffer, targetOffset: number, sourceOffset: number, length: number){
+        const written = buffer.copy(this.buf, targetOffset, sourceOffset, sourceOffset+length);
+        if (targetOffset + written > this.length)
+            this.length = targetOffset + written;
     }
 
     remove(start: number, length: number) {

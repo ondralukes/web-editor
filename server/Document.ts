@@ -33,8 +33,9 @@ export default class Document{
     execute(cmd: Command, sender: Client){
         // Server-only commands
         if (cmd instanceof FetchCommand){
-            const resp = new DataCommand(cmd.offset, cmd.offset, this.content.read(cmd.offset, cmd.len));
-            if(cmd.offset+cmd.len >= this.content.length){
+            const data = this.content.readString(cmd.offset, cmd.len);
+            const resp = new DataCommand(cmd.offset, cmd.offset, data);
+            if(cmd.offset+data.length >= this.content.length){
                 resp.flags = DataCommandFlags.LoadLast;
             } else {
                 resp.flags = DataCommandFlags.Load;
