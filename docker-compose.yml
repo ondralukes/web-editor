@@ -1,0 +1,12 @@
+version: '2.0'
+services:
+  web-editor:
+    build: .
+    container_name: web-editor
+    restart: unless-stopped
+    networks:
+      - docker-network
+networks:
+  docker-network:
+    external:
+      name: docker-network
