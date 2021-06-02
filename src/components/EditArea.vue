@@ -16,7 +16,7 @@
         {{code}} / {{clients}} connection(s) /
         <span class="action disconnect" @click="disconnectPrompt = true;">Disconnect</span>
         /
-        <a class="action download" :href="`/download/${code}`" download>Download</a>
+        <a class="action download" :href="`download/${code}`" download>Download</a>
         /
         <span class="action debug" @click="toggleDebug">Debug</span>
       </h3>
