@@ -85,7 +85,7 @@ export default {
     this.g = canvas.getContext('2d');
     this.g.font = "16px monospace";
     this.fontWidth = this.g.measureText('a').width;
-    this.ws = new WebSocket(`ws://${window.location.host}/${this.code}`);
+    this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${window.location.pathname}/${this.code}`);
     this.ws.addEventListener('message', (msg) => {
       this.execute(msg.data);
     });
