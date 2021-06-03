@@ -38,12 +38,16 @@
       </div>
     </div>
     <div class="canvas-container" ref="ccontainer">
+      <textarea
+          @keyup="inputKey"
+          @input="input"
+          @compositionstart="inputComposing = true;"
+          @compositionend="inputComposing = false;"
+          ref="input" class="input"></textarea>
       <canvas
-          tabindex="1"
           ref="canvas"
           @click="onclick"
-          @wheel="onscroll"
-          @keydown="onkeydown"></canvas>
+          @wheel="onscroll"></canvas>
     </div>
   </div>
 </template>
@@ -56,7 +60,14 @@ export default {
   data(){
     return{
       ws: null,
-      content: '',
+      content:{
+        data: new Uint8Array(65536),
+        start: 0,
+        end: 0,
+        get length(){
+          return this.end - this.start;
+        }
+      },
       clients: 0,
       g: null,
       scroll: 0,
@@ -74,7 +85,8 @@ export default {
         chunkSize: 0,
         length: 0,
       },
-      disconnectPrompt: false
+      disconnectPrompt: false,
+      inputComposing: false,
     }
   },
   mounted() {
@@ -85,19 +97,21 @@ export default {
     this.g = canvas.getContext('2d');
     this.g.font = "16px monospace";
     this.fontWidth = this.g.measureText('a').width;
-    this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${window.location.pathname}/${this.code}`);
-    this.ws.addEventListener('message', (msg) => {
-      this.execute(msg.data);
-    });
-    this.ws.addEventListener('open', () => {
-      this.ws.send(JSON.stringify(
-          {
-            type: 'fetch',
-            offset: 0,
-            len: 128
-          }
-      ));
-    });
+    let path = window.location.pathname;
+    if(path.endsWith('/')) path = path.slice(0, -1);
+    // this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${path}/${this.code}`);
+    // this.ws.addEventListener('message', (msg) => {
+    //   this.execute(msg.data);
+    // });
+    // this.ws.addEventListener('open', () => {
+    //   this.ws.send(JSON.stringify(
+    //       {
+    //         type: 'fetch',
+    //         offset: 0,
+    //         len: 128
+    //       }
+    //   ));
+    // });
     window.addEventListener('resize', this.onresize);
   },
   methods: {
@@ -107,143 +121,163 @@ export default {
         this.g.font = '16px monospace';
         this.g.textBaseline = 'top';
         const lineHeight = this.lineHeight;
-        const lines = this.content.split('\n');
+        const lines = this.content.data.subarray(0, this.content.length).reduce((acc, cur) => (cur === 10)?acc+1:acc, 0)+1;
         const stick = this.scroll === this.maxScroll && !dontStickScroll;
         this.maxScroll = Math.max(
-            lines.length*lineHeight - this.canvas.height,
+            lines*lineHeight - this.canvas.height,
             0);
         if(this.scroll > this.maxScroll || stick) this.scroll = this.maxScroll;
         let lineStart = 0;
-        for (let i = 0; i < lines.length; i++) {
+        const decoder = new TextDecoder();
+        for (let i = 0; i < lines; i++) {
           this.g.fillStyle = '#fafafa';
-          this.g.fillText(lines[i], 0, i * lineHeight - this.scroll);
+          let lineEnd = this.content.data.subarray(0, this.content.length).indexOf(10, lineStart);
+          if(lineEnd === -1) lineEnd = this.content.length;
+          const text = decoder.decode(this.content.data.subarray(lineStart, lineEnd));
+          this.g.fillText(text, 0, i * lineHeight - this.scroll);
           for (const [k, c] of this.cursors.entries()) {
-            if (c - lineStart <= lines[i].length) {
+            if (c - lineStart <= text.length) {
               this.g.fillStyle = k===0?'green':'orange';
               this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
             }
           }
-          lineStart += lines[i].length + 1;
+          lineStart = lineEnd + 1;
         }
-        if(this.canLoad && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
-          this.ws.send(JSON.stringify(
-              {
-                type: 'fetch',
-                offset: this.loadedLength,
-                len: 128
-              }
-          ));
-          this.canLoad = false;
-        }
+        // if(this.canLoad && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
+        //   this.ws.send(JSON.stringify(
+        //       {
+        //         type: 'fetch',
+        //         offset: this.loadedLength,
+        //         len: 128
+        //       }
+        //   ));
+        //   this.canLoad = false;
+        // }
       });
     },
-    onkeydown(e) {
-      if (e.isComposing) return;
+    input(){
+      if(this.inputComposing) return;
+      const input = this.$refs.input;
       let cursor = this.cursors.get(0);
-      if (e.key === 'Backspace') {
-        if(cursor === 0) return;
-        this.content = this.content.slice(0,  cursor-1) + this.content.substring(cursor);
-        this.loadedLength -= 1;
-        this.lastRequested -= 1;
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'data',
-              start: cursor-1,
-              end: cursor,
-              data: ''
-            }
-        ));
-        this.moveCursors(cursor, -1);
-        return;
-      } else if(e.key === 'Delete'){
-        if(cursor === this.content.length) return;
-        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
-        this.loadedLength -= 1;
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'data',
-              start:cursor,
-              end: cursor+1,
-              data: ''
-            }
-        ));
-        return;
-      } else if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
-        let c = this.cursors.get(0);
-        if(e.key === 'ArrowLeft'){
-          if(c === 0) return;
-          c--;
-        } else if(e.key === 'ArrowRight'){
-          if(c === this.content.length) return;
-          c++;
-        }
-        this.cursors.set(0, c);
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'cursor',
-              pos: this.cursors.get(0)
-            }
-        ));
-        return;
-      }
-      let value;
-      if (e.key === 'Enter') {
-        value = '\n';
-      } else {
-        value = e.key;
-      }
+      let v = input.value;
+      if(v.length === 2) return;
+      input.value = "xy";
+      input.selectionStart = 1;
+      input.selectionEnd = 1;
 
-      const ct = this.content;
-      this.content = ct.substring(0, cursor) + value + ct.substring(cursor);
-      this.loadedLength += value.length;
-      this.moveCursors(cursor, value.length);
-      this.ws.send(JSON.stringify(
-          {
-            type: 'data',
-            start: cursor,
-            end: cursor,
-            data: value
-          }
-      ));
+      if(!v.startsWith('x')){
+        if(cursor === 0) return;
+        const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, -1))
+        this.content.data.copyWithin(cursor-removedLength, cursor, this.content.length);
+        this.content.end -= removedLength;
+        this.draw();
+        // this.ws.send(JSON.stringify(
+        //     {
+        //       type: 'data',
+        //       start: cursor-1,
+        //       end: cursor,
+        //       data: ''
+        //     }
+        // ));
+        this.moveCursors(cursor, -removedLength);
+        return;
+      }
+      if(!v.endsWith('y')){
+        if(cursor === this.content.length) return;
+        const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, 0));
+        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
+        this.content.data.copyWithin(cursor, cursor+removedLength, this.content.length);
+        this.content.end -= removedLength;
+        this.draw();
+        // this.ws.send(JSON.stringify(
+        //     {
+        //       type: 'data',
+        //       start:cursor,
+        //       end: cursor+1,
+        //       data: ''
+        //     }
+        // ));
+        return;
+      }
+      v = v.slice(1, -1);
+      const insertLength = this.getByteLength(v);
+      this.content.data.copyWithin(cursor+insertLength, cursor, this.content.length);
+      new TextEncoder().encodeInto(v, this.content.data.subarray(cursor, cursor+insertLength));
+      this.content.end += insertLength;
+      this.moveCursors(cursor, insertLength);
+      // this.ws.send(JSON.stringify(
+      //     {
+      //       type: 'data',
+      //       start: cursor,
+      //       end: cursor,
+      //       data: v
+      //     }
+      // ));
       this.draw();
     },
-    onclick(e){
-      const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
-      const col = Math.floor(e.offsetX/this.fontWidth);
-      let rowStart = 0;
-      let rowEnd = this.content.indexOf('\n', rowStart+1);
-      if(rowEnd === -1) rowEnd = this.content.length;
-      for(let i = 0; i < row;i++){
-        if(rowStart === -1){
-          this.cursors.set(0, this.content.length);
-          this.draw();
-          this.ws.send(JSON.stringify(
-              {
-                type: 'cursor',
-                pos: this.cursors.get(0)
-              }
-          ));
-          return;
+    inputKey(){
+      const input = this.$refs.input;
+      let cursor = this.cursors.get(0);
+      let v = input.value;
+      if(v.length === 2 && (input.selectionStart === 0 || input.selectionStart === 2)){
+        if(input.selectionStart === 0){
+          if(cursor === 0) return;
+          cursor -= this.getByteLength(this.getCharFromBytePosition(cursor, -1));
+        } else {
+          if(cursor === this.content.length) return;
+          cursor += this.getByteLength(this.getCharFromBytePosition(cursor, 0));
         }
-        rowStart = rowEnd;
-        rowEnd = this.content.indexOf('\n', rowStart+1);
-        if(rowEnd === -1) rowEnd = this.content.length;
+        this.cursors.set(0, cursor);
+        this.draw();
+        // this.ws.send(JSON.stringify(
+        //     {
+        //       type: 'cursor',
+        //       pos: this.cursors.get(0)
+        //     }
+        // ));
+        input.selectionStart = 1;
+        input.selectionEnd = 1;
       }
-      if(rowStart+col < rowEnd){
-        this.cursors.set(0, rowStart+col);
-      } else {
-        this.cursors.set(0, rowEnd);
-      }
-      this.ws.send(JSON.stringify(
-          {
-            type: 'cursor',
-            pos: this.cursors.get(0)
-          }
-      ));
-      this.draw();
+    },
+    onclick(/*e*/){
+      const input = this.$refs.input;
+      input.value = "xy";
+      input.focus();
+      input.selectionStart = 1;
+      input.selectionEnd = 1;
+      // const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
+      // const col = Math.floor(e.offsetX/this.fontWidth);
+      // let rowStart = 0;
+      // let rowEnd = this.content.indexOf('\n', rowStart+1);
+      // if(rowEnd === -1) rowEnd = this.content.length;
+      // for(let i = 0; i < row;i++){
+      //   if(rowStart === -1){
+      //     this.cursors.set(0, this.content.length);
+      //     this.draw();
+      //     this.ws.send(JSON.stringify(
+      //         {
+      //           type: 'cursor',
+      //           pos: this.cursors.get(0)
+      //         }
+      //     ));
+      //     return;
+      //   }
+      //   rowStart = rowEnd;
+      //   rowEnd = this.content.indexOf('\n', rowStart+1);
+      //   if(rowEnd === -1) rowEnd = this.content.length;
+      // }
+      // if(rowStart+col < rowEnd){
+      //   this.cursors.set(0, rowStart+col);
+      // } else {
+      //   this.cursors.set(0, rowEnd);
+      // }
+      // this.ws.send(JSON.stringify(
+      //     {
+      //       type: 'cursor',
+      //       pos: this.cursors.get(0)
+      //     }
+      // ));
+      // this.draw();
     },
     onresize(){
       this.canvas.width = this.$refs.ccontainer.offsetWidth;
@@ -312,6 +346,20 @@ export default {
           }
       ));
       this.$nextTick(() => this.onresize());
+    },
+    getByteLength(str){
+      return new TextEncoder().encode(str).length;
+    },
+    getCharFromBytePosition(byteOffset, charOffset){
+      const dec = new TextDecoder();
+      if(charOffset >= 0){
+        const sliced = this.content.data.slice(byteOffset, byteOffset+charOffset*4+4);
+        const text = dec.decode(sliced);
+        return text[charOffset];
+      }
+      const sliced = this.content.data.slice(Math.max(0,byteOffset+charOffset*4-4), byteOffset);
+      const text = dec.decode(sliced);
+      return text[text.length + charOffset];
     }
   }
 }
@@ -370,5 +418,9 @@ canvas{
 
 .debug-info{
   padding: 10px 0;
+}
+
+.input{
+  opacity: 0;
 }
 </style>
