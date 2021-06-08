@@ -32,6 +32,10 @@ export default class Content {
     }
 
     read(buffer: Buffer, offset: number, length: number) {
+        if(offset > this.length) return 0;
+        if(offset+length > this.length){
+            length = this.length - offset;
+        }
         let [n, firstChunkOffset] = this.getChunkOffset(offset);
         let copied = 0;
         copied += this.getChunk(n).copyTo(buffer, 0, firstChunkOffset, firstChunkOffset + length);
@@ -39,6 +43,7 @@ export default class Content {
             n++;
             copied += this.getChunk(n).copyTo(buffer, copied, 0, length - copied);
         }
+        return copied;
     }
 
     readString(offset: number, length: number){
@@ -54,7 +59,7 @@ export default class Content {
     }
 
     // Replace does not support data longer than chunk size
-    replace(data: string, offset: number, replaceLength: number) {
+    replace(data: Buffer, offset: number, replaceLength: number) {
         if(offset === this.length){
             this.write(data, offset);
             return;
@@ -68,14 +73,14 @@ export default class Content {
             let [n, firstChunkOffset] = this.getChunkOffset(offset);
             let written = 0;
             let c = this.getChunk(n);
-            let chunkOffset = c.writeString(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
+            let chunkOffset = c.write(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
             written += chunkOffset;
             chunkOffset += firstChunkOffset;
             this.chunkLengths[n] = c.length;
             while (written != data.length) {
                 n++;
                 const c = this.getChunk(n);
-                chunkOffset = c.writeString(data, 0, written, !this.chunkExists(n + 1));
+                chunkOffset = c.write(data, 0, written, !this.chunkExists(n + 1));
                 written += chunkOffset;
                 this.chunkLengths[n] = c.length;
             }
@@ -107,7 +112,7 @@ export default class Content {
                     this.insertChunk(n + 1);
                     overflowChunk = this.getChunk(n + 1);
                 }
-                overflowChunk.writeString(overflowBuffer.toString('utf-8'), 0, 0, true);
+                overflowChunk.write(overflowBuffer, 0, 0, true);
                 this.chunkLengths[n + 1] = overflowChunk.length;
             }
             currentChunk.shift(chunkOffset, diff);
@@ -116,16 +121,16 @@ export default class Content {
         }
     }
 
-    write(data: string, offset: number) {
+    write(data: Buffer, offset: number) {
         let [n, firstChunkOffset] = this.getChunkOffset(offset);
         let written = 0;
         let c = this.getChunk(n);
-        written += c.writeString(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
+        written += c.write(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
         this.chunkLengths[n] = c.length;
         while (written != data.length) {
             n++;
             const c = this.getChunk(n);
-            written += c.writeString(data, 0, written, !this.chunkExists(n + 1));
+            written += c.write(data, 0, written, !this.chunkExists(n + 1));
             this.chunkLengths[n] = c.length;
         }
         if (offset + data.length > this.length)
@@ -193,7 +198,7 @@ export default class Content {
         while(offset != this.length) {
             const len = Math.min(this.chunkSize, this.length-offset);
             this.read(buffer, offset, len);
-            this.getChunk(chunk).write(buffer, 0, 0, len);
+            this.getChunk(chunk).write(buffer, 0, 0, true);
             this.chunkLengths[chunk] = len;
             offset += len;
             chunk++;
@@ -264,21 +269,15 @@ class Chunk {
         return this.buf.copy(buf, targetOffset, sourceOffset, Math.min(this.length, sourceEnd));
     }
 
-    writeString(data: string, targetOffset: number, sourceOffset: number, canExtend: boolean) {
+    write(data: Buffer, targetOffset: number, sourceOffset: number, canExtend: boolean) {
         this.lastUsed = Date.now();
         let length = canExtend ? data.length : this.length - targetOffset;
         if (length > this.buf.length - targetOffset)
             length = this.buf.length - targetOffset;
-        const written = this.buf.write(data.substring(sourceOffset), targetOffset, length, 'utf-8');
+        const written = data.copy(this.buf, targetOffset, sourceOffset, sourceOffset+length);
         if (targetOffset + written > this.length)
             this.length = targetOffset + written;
         return written;
-    }
-
-    write(buffer: Buffer, targetOffset: number, sourceOffset: number, length: number){
-        const written = buffer.copy(this.buf, targetOffset, sourceOffset, sourceOffset+length);
-        if (targetOffset + written > this.length)
-            this.length = targetOffset + written;
     }
 
     remove(start: number, length: number) {

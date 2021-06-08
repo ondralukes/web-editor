@@ -3,9 +3,8 @@ import List from "./List";
 import {
     Command,
     DataCommand,
-    DataCommandFlags,
     DebugCommand,
-    FetchCommand,
+    FetchCommand, FetchResponseCommand,
     StatsCommand,
     ToggleDebugCommand
 } from "./Command";
@@ -40,13 +39,10 @@ export default class Document{
     execute(cmd: Command, sender: Client){
         // Server-only commands
         if (cmd instanceof FetchCommand){
-            const data = this.content.readString(cmd.offset, cmd.len);
-            const resp = new DataCommand(cmd.offset, cmd.offset, data);
-            if(cmd.offset+data.length >= this.content.length){
-                resp.flags = DataCommandFlags.LoadLast;
-            } else {
-                resp.flags = DataCommandFlags.Load;
-            }
+            const buffer = Buffer.allocUnsafe(cmd.len);
+            const read = this.content.read(buffer, cmd.offset, cmd.len);
+            if(read == 0) return;
+            const resp = new FetchResponseCommand(cmd.offset, cmd.offset, buffer.subarray(0, read));
             sender.send(resp);
             return;
         }
@@ -106,8 +102,7 @@ class Client{
     }
 
     private onMessage(msg: WebSocket.Data){
-        if (typeof msg !== "string")
-            return;
+        if(!Buffer.isBuffer(msg)) return;
         const cmd = Command.deserialize(msg);
         if(cmd === null) return;
         cmd.sender = this.id;

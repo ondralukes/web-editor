@@ -99,19 +99,13 @@ export default {
     this.fontWidth = this.g.measureText('a').width;
     let path = window.location.pathname;
     if(path.endsWith('/')) path = path.slice(0, -1);
-    // this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${path}/${this.code}`);
-    // this.ws.addEventListener('message', (msg) => {
-    //   this.execute(msg.data);
-    // });
-    // this.ws.addEventListener('open', () => {
-    //   this.ws.send(JSON.stringify(
-    //       {
-    //         type: 'fetch',
-    //         offset: 0,
-    //         len: 128
-    //       }
-    //   ));
-    // });
+    this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${path}/${this.code}`);
+    this.ws.addEventListener('message', (msg) => {
+      this.decode(msg.data, this.execute);
+    });
+    this.ws.addEventListener('open', () => {
+      this.send(1, [0, 128]);
+    });
     window.addEventListener('resize', this.onresize);
   },
   methods: {
@@ -143,16 +137,10 @@ export default {
           }
           lineStart = lineEnd + 1;
         }
-        // if(this.canLoad && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
-        //   this.ws.send(JSON.stringify(
-        //       {
-        //         type: 'fetch',
-        //         offset: this.loadedLength,
-        //         len: 128
-        //       }
-        //   ));
-        //   this.canLoad = false;
-        // }
+        if(this.canLoad && (lines-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
+          this.send(1, [this.content.end, 128]);
+          this.canLoad = false;
+        }
       });
     },
     input(){
@@ -171,14 +159,7 @@ export default {
         this.content.data.copyWithin(cursor-removedLength, cursor, this.content.length);
         this.content.end -= removedLength;
         this.draw();
-        // this.ws.send(JSON.stringify(
-        //     {
-        //       type: 'data',
-        //       start: cursor-1,
-        //       end: cursor,
-        //       data: ''
-        //     }
-        // ));
+        this.send(0, [cursor-1, cursor]);
         this.moveCursors(cursor, -removedLength);
         return;
       }
@@ -189,30 +170,17 @@ export default {
         this.content.data.copyWithin(cursor, cursor+removedLength, this.content.length);
         this.content.end -= removedLength;
         this.draw();
-        // this.ws.send(JSON.stringify(
-        //     {
-        //       type: 'data',
-        //       start:cursor,
-        //       end: cursor+1,
-        //       data: ''
-        //     }
-        // ));
+        this.send(0, [cursor, cursor+1]);
         return;
       }
       v = v.slice(1, -1);
       const insertLength = this.getByteLength(v);
       this.content.data.copyWithin(cursor+insertLength, cursor, this.content.length);
-      new TextEncoder().encodeInto(v, this.content.data.subarray(cursor, cursor+insertLength));
+      const target = this.content.data.subarray(cursor, cursor+insertLength);
+      new TextEncoder().encodeInto(v, target);
       this.content.end += insertLength;
       this.moveCursors(cursor, insertLength);
-      // this.ws.send(JSON.stringify(
-      //     {
-      //       type: 'data',
-      //       start: cursor,
-      //       end: cursor,
-      //       data: v
-      //     }
-      // ));
+      this.send(0, [cursor, cursor], target);
       this.draw();
     },
     inputKey(){
@@ -229,12 +197,7 @@ export default {
         }
         this.cursors.set(0, cursor);
         this.draw();
-        // this.ws.send(JSON.stringify(
-        //     {
-        //       type: 'cursor',
-        //       pos: this.cursors.get(0)
-        //     }
-        // ));
+        this.send(3, [this.cursors.get(0)]);
         input.selectionStart = 1;
         input.selectionEnd = 1;
       }
@@ -290,40 +253,91 @@ export default {
       if(this.scroll > this.maxScroll) this.scroll = this.maxScroll;
       this.draw();
     },
-    execute(msg) {
-      if (typeof msg !== "string") return;
-      const cmd = JSON.parse(msg);
-      if (this.debug && cmd.type !== 'debug'){
-        this.debugInfo.lastCommand = msg;
+    send(type, params, data){
+      let len = 1+params.length*4;
+      if(typeof data !== 'undefined')
+        len += data.length;
+      const buf = new ArrayBuffer(len);
+      const dataview = new DataView(buf);
+      let off = 0;
+      dataview.setUint8(0, type);
+      off++;
+      for(const p of params){
+        dataview.setUint32(off, p);
+        off += 4;
       }
-
-      if (cmd.type === 'stats') {
-        this.clients = cmd.clients;
-        return;
+      if(typeof data !== 'undefined') {
+        new Uint8Array(buf, off).set(data);
       }
-
-      if(cmd.type === 'debug'){
-        this.debugInfo.totalChunks = cmd.totalChunks;
-        this.debugInfo.loadedChunks = cmd.loadedChunks;
-        this.debugInfo.length = cmd.length;
-        this.debugInfo.chunkSize = cmd.chunkSize;
-      }
-      if (cmd.type === 'cursor'){
-        this.cursors.set(cmd.sender, cmd.pos);
-        this.draw();
-        return;
-      }
-      if(cmd.type === 'data') {
-        if(cmd.start > this.loadedLength) return;
-        const text = this.content;
-        const lengthDiff = cmd.data.length - cmd.end + cmd.start;
-        if(cmd.flags === 'load'){
+      this.ws.send(buf);
+    },
+    decode(msg, cb){
+      const reader = new FileReader();
+      reader.onload = () => {
+        const view = new DataView(reader.result);
+        const result = {
+          type: 0,
+          params: []
+        };
+        let offset = 0;
+        result.type = view.getUint8(0);
+        offset++;
+        let paramCount = 0;
+        if(result.type === 0 || result.type === 1 || result.type === 6) paramCount = 2; // data, fetch, fetch response
+        if(result.type === 3) paramCount = 2; // cursor
+        for(let i = 0;i<paramCount;i++){
+          result.params.push(view.getUint32(offset));
+          offset += 4;
+        }
+        result.data = new Uint8Array(reader.result).subarray(offset);
+        cb(result);
+      };
+      reader.readAsArrayBuffer(msg);
+    },
+    execute(cmd) {
+      // this.decode(msg);
+      // if (typeof msg !== "string") return;
+      // const cmd = JSON.parse(msg);
+      // if (this.debug && cmd.type !== 'debug'){
+      //   this.debugInfo.lastCommand = msg;
+      // }
+      //
+      // if (cmd.type === 'stats') {
+      //   this.clients = cmd.clients;
+      //   return;
+      // }
+      //
+      // if(cmd.type === 'debug'){
+      //   this.debugInfo.totalChunks = cmd.totalChunks;
+      //   this.debugInfo.loadedChunks = cmd.loadedChunks;
+      //   this.debugInfo.length = cmd.length;
+      //   this.debugInfo.chunkSize = cmd.chunkSize;
+      // }
+      // if (cmd.type === 'cursor'){
+      //   this.cursors.set(cmd.sender, cmd.pos);
+      //   this.draw();
+      //   return;
+      // }
+      if(cmd.type === 0 || cmd.type === 6) { // data, fetch response
+        const start = cmd.params[0];
+        const end = cmd.params[1];
+        if(start > this.content.end) return;
+        const lengthDiff = cmd.data.length - end + start;
+        if(cmd.type === 6){
+          console.log('fetch ready');
           this.canLoad = true;
         }
-        this.loadedLength += lengthDiff;
-        this.moveCursors(cmd.end, lengthDiff);
-        this.content = text.substring(0, cmd.start) + cmd.data + text.substring(cmd.end)
-        this.draw(cmd.flags === 'load' || cmd.flags === 'load last');
+        this.moveCursors(end, lengthDiff);
+        this.content.data.copyWithin(start+lengthDiff, start, this.content.length);
+        this.content.data.set(cmd.data, start);
+        this.content.end += lengthDiff;
+        this.draw(cmd.type === 6);
+        return;
+      }
+      if(cmd.type === 3){
+        this.cursors.set(cmd.params[1], cmd.params[0]);
+        this.draw();
+        return;
       }
     },
     moveCursors(pos, diff){
