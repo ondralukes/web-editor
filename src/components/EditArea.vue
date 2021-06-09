@@ -21,9 +21,9 @@
         <span class="action debug" @click="toggleDebug">Debug</span>
       </h3>
       <div v-if="debug" class="debug-info">
-        Last received: {{ debugInfo.lastCommand }}
+        Last received: {{ JSON.stringify(debugInfo.lastCommand) }}
         <br>
-        Loaded length: {{ loadedLength }}
+        Content range: {{ this.content.start }} ~ {{ this.content.end}} (length {{this.content.length}})
         <br>
         Server:
         <br>
@@ -38,12 +38,16 @@
       </div>
     </div>
     <div class="canvas-container" ref="ccontainer">
+      <textarea
+          @keyup="inputKey"
+          @input="input"
+          @compositionstart="inputComposing = true;"
+          @compositionend="inputComposing = false;"
+          ref="input" class="input"></textarea>
       <canvas
-          tabindex="1"
           ref="canvas"
           @click="onclick"
-          @wheel="onscroll"
-          @keydown="onkeydown"></canvas>
+          @wheel="onscroll"></canvas>
     </div>
   </div>
 </template>
@@ -56,7 +60,14 @@ export default {
   data(){
     return{
       ws: null,
-      content: '',
+      content:{
+        data: new Uint8Array(65536),
+        start: 0,
+        end: 0,
+        get length(){
+          return this.end - this.start;
+        }
+      },
       clients: 0,
       g: null,
       scroll: 0,
@@ -64,17 +75,17 @@ export default {
       fontWidth: null,
       lineHeight: 16,
       cursors: new Map([[0, 0]]),
-      loadedLength: 0,
       canLoad: true,
       debug: false,
       debugInfo: {
-        lastCommand: '',
+        lastCommand: null,
         totalChunks: 0,
         loadedChunks: 0,
         chunkSize: 0,
         length: 0,
       },
-      disconnectPrompt: false
+      disconnectPrompt: false,
+      inputComposing: false,
     }
   },
   mounted() {
@@ -85,18 +96,14 @@ export default {
     this.g = canvas.getContext('2d');
     this.g.font = "16px monospace";
     this.fontWidth = this.g.measureText('a').width;
-    this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${window.location.pathname}/${this.code}`);
+    let path = window.location.pathname;
+    if(path.endsWith('/')) path = path.slice(0, -1);
+    this.ws = new WebSocket(`ws${window.location.protocol==='https:'?'s':''}://${window.location.host}${path}/${this.code}`);
     this.ws.addEventListener('message', (msg) => {
-      this.execute(msg.data);
+      this.decode(msg.data, this.execute);
     });
     this.ws.addEventListener('open', () => {
-      this.ws.send(JSON.stringify(
-          {
-            type: 'fetch',
-            offset: 0,
-            len: 128
-          }
-      ));
+      this.send(1, [0, 128]);
     });
     window.addEventListener('resize', this.onresize);
   },
@@ -107,142 +114,123 @@ export default {
         this.g.font = '16px monospace';
         this.g.textBaseline = 'top';
         const lineHeight = this.lineHeight;
-        const lines = this.content.split('\n');
+        const lines = this.content.data.subarray(0, this.content.length).reduce((acc, cur) => (cur === 10)?acc+1:acc, 0)+1;
         const stick = this.scroll === this.maxScroll && !dontStickScroll;
         this.maxScroll = Math.max(
-            lines.length*lineHeight - this.canvas.height,
+            lines*lineHeight - this.canvas.height,
             0);
         if(this.scroll > this.maxScroll || stick) this.scroll = this.maxScroll;
         let lineStart = 0;
-        for (let i = 0; i < lines.length; i++) {
+        const decoder = new TextDecoder();
+        for (let i = 0; i < lines; i++) {
           this.g.fillStyle = '#fafafa';
-          this.g.fillText(lines[i], 0, i * lineHeight - this.scroll);
+          let lineEnd = this.content.data.subarray(0, this.content.length).indexOf(10, lineStart);
+          if(lineEnd === -1) lineEnd = this.content.length;
+          const text = decoder.decode(this.content.data.subarray(lineStart, lineEnd));
+          this.g.fillText(text, 0, i * lineHeight - this.scroll);
           for (const [k, c] of this.cursors.entries()) {
-            if (c - lineStart <= lines[i].length) {
+            if (c >= lineStart && c <= lineEnd) {
+              const cherLen = this.getCharLength(this.content.data.subarray(lineStart, c));
               this.g.fillStyle = k===0?'green':'orange';
-              this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
+              this.g.fillRect(cherLen * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
             }
           }
-          lineStart += lines[i].length + 1;
+          lineStart = lineEnd + 1;
         }
-        if(this.canLoad && (lines.length-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
-          this.ws.send(JSON.stringify(
-              {
-                type: 'fetch',
-                offset: this.loadedLength,
-                len: 128
-              }
-          ));
+        if(this.canLoad && (lines-1)*lineHeight-this.scroll < this.canvas.height && this.ws.readyState === 1){
+          this.send(1, [this.content.end, 128]);
           this.canLoad = false;
         }
       });
     },
-    onkeydown(e) {
-      if (e.isComposing) return;
+    input(){
+      if(this.inputComposing) return;
+      const input = this.$refs.input;
       let cursor = this.cursors.get(0);
-      if (e.key === 'Backspace') {
-        if(cursor === 0) return;
-        this.content = this.content.slice(0,  cursor-1) + this.content.substring(cursor);
-        this.loadedLength -= 1;
-        this.lastRequested -= 1;
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'data',
-              start: cursor-1,
-              end: cursor,
-              data: ''
-            }
-        ));
-        this.moveCursors(cursor, -1);
-        return;
-      } else if(e.key === 'Delete'){
-        if(cursor === this.content.length) return;
-        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
-        this.loadedLength -= 1;
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'data',
-              start:cursor,
-              end: cursor+1,
-              data: ''
-            }
-        ));
-        return;
-      } else if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
-        let c = this.cursors.get(0);
-        if(e.key === 'ArrowLeft'){
-          if(c === 0) return;
-          c--;
-        } else if(e.key === 'ArrowRight'){
-          if(c === this.content.length) return;
-          c++;
-        }
-        this.cursors.set(0, c);
-        this.draw();
-        this.ws.send(JSON.stringify(
-            {
-              type: 'cursor',
-              pos: this.cursors.get(0)
-            }
-        ));
-        return;
-      }
-      let value;
-      if (e.key === 'Enter') {
-        value = '\n';
-      } else {
-        value = e.key;
-      }
+      let v = input.value;
+      if(v.length === 2) return;
+      input.value = "xy";
+      input.selectionStart = 1;
+      input.selectionEnd = 1;
 
-      const ct = this.content;
-      this.content = ct.substring(0, cursor) + value + ct.substring(cursor);
-      this.loadedLength += value.length;
-      this.moveCursors(cursor, value.length);
-      this.ws.send(JSON.stringify(
-          {
-            type: 'data',
-            start: cursor,
-            end: cursor,
-            data: value
-          }
-      ));
+      if(!v.startsWith('x')){
+        if(cursor === 0) return;
+        const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, -1))
+        this.content.data.copyWithin(cursor-removedLength, cursor, this.content.length);
+        this.content.end -= removedLength;
+        this.draw();
+        this.send(0, [cursor-1, cursor]);
+        this.moveCursors(cursor, -removedLength);
+        return;
+      }
+      if(!v.endsWith('y')){
+        if(cursor === this.content.length) return;
+        const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, 0));
+        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
+        this.content.data.copyWithin(cursor, cursor+removedLength, this.content.length);
+        this.content.end -= removedLength;
+        this.draw();
+        this.send(0, [cursor, cursor+1]);
+        return;
+      }
+      v = v.slice(1, -1);
+      const insertLength = this.getByteLength(v);
+      this.content.data.copyWithin(cursor+insertLength, cursor, this.content.length);
+      const target = this.content.data.subarray(cursor, cursor+insertLength);
+      new TextEncoder().encodeInto(v, target);
+      this.content.end += insertLength;
+      this.moveCursors(cursor, insertLength);
+      this.send(0, [cursor, cursor], target);
       this.draw();
     },
+    inputKey(){
+      const input = this.$refs.input;
+      let cursor = this.cursors.get(0);
+      let v = input.value;
+      if(v.length === 2 && (input.selectionStart === 0 || input.selectionStart === 2)){
+        if(input.selectionStart === 0){
+          if(cursor === 0) return;
+          cursor -= this.getByteLength(this.getCharFromBytePosition(cursor, -1));
+        } else {
+          if(cursor === this.content.length) return;
+          cursor += this.getByteLength(this.getCharFromBytePosition(cursor, 0));
+        }
+        this.cursors.set(0, cursor);
+        this.draw();
+        this.send(3, [this.cursors.get(0)]);
+        input.selectionStart = 1;
+        input.selectionEnd = 1;
+      }
+    },
     onclick(e){
+      const input = this.$refs.input;
+      input.value = "xy";
+      input.focus();
+      input.selectionStart = 1;
+      input.selectionEnd = 1;
       const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
       const col = Math.floor(e.offsetX/this.fontWidth);
       let rowStart = 0;
-      let rowEnd = this.content.indexOf('\n', rowStart+1);
+      let rowEnd = this.content.data.indexOf(10, rowStart);
       if(rowEnd === -1) rowEnd = this.content.length;
       for(let i = 0; i < row;i++){
         if(rowStart === -1){
-          this.cursors.set(0, this.content.length);
+          this.cursors.set(0, this.content.end);
           this.draw();
-          this.ws.send(JSON.stringify(
-              {
-                type: 'cursor',
-                pos: this.cursors.get(0)
-              }
-          ));
+          this.send(3, [this.content.end]);
           return;
         }
-        rowStart = rowEnd;
-        rowEnd = this.content.indexOf('\n', rowStart+1);
+        rowStart = rowEnd+1;
+        rowEnd = this.content.data.indexOf(10, rowStart);
         if(rowEnd === -1) rowEnd = this.content.length;
       }
       if(rowStart+col < rowEnd){
-        this.cursors.set(0, rowStart+col);
+        const text = new TextDecoder().decode(this.content.data.subarray(rowStart, rowEnd));
+        this.cursors.set(0, this.content.start + rowStart+this.getByteLength(text.substring(0, col)));
       } else {
-        this.cursors.set(0, rowEnd);
+        this.cursors.set(0, this.content.start + rowEnd);
       }
-      this.ws.send(JSON.stringify(
-          {
-            type: 'cursor',
-            pos: this.cursors.get(0)
-          }
-      ));
+      this.send(3, [this.cursors.get(0)]);
       this.draw();
     },
     onresize(){
@@ -256,40 +244,87 @@ export default {
       if(this.scroll > this.maxScroll) this.scroll = this.maxScroll;
       this.draw();
     },
-    execute(msg) {
-      if (typeof msg !== "string") return;
-      const cmd = JSON.parse(msg);
-      if (this.debug && cmd.type !== 'debug'){
-        this.debugInfo.lastCommand = msg;
+    send(type, params, data){
+      let len = 1+params.length*4;
+      if(typeof data !== 'undefined')
+        len += data.length;
+      const buf = new ArrayBuffer(len);
+      const dataview = new DataView(buf);
+      let off = 0;
+      dataview.setUint8(0, type);
+      off++;
+      for(const p of params){
+        dataview.setUint32(off, p);
+        off += 4;
+      }
+      if(typeof data !== 'undefined') {
+        new Uint8Array(buf, off).set(data);
+      }
+      this.ws.send(buf);
+    },
+    decode(msg, cb){
+      const reader = new FileReader();
+      reader.onload = () => {
+        const view = new DataView(reader.result);
+        const result = {
+          type: 0,
+          params: []
+        };
+        let offset = 0;
+        result.type = view.getUint8(0);
+        offset++;
+        let paramCount = 0;
+        if(result.type === 0 || result.type === 1 || result.type === 6) paramCount = 2; // data, fetch, fetch response
+        if(result.type === 3) paramCount = 2; // cursor
+        if(result.type === 2) paramCount = 1; // stats
+        if(result.type === 5) paramCount = 4; // debug
+        for(let i = 0;i<paramCount;i++){
+          result.params.push(view.getUint32(offset));
+          offset += 4;
+        }
+        result.data = new Uint8Array(reader.result).subarray(offset);
+        cb(result);
+      };
+      reader.readAsArrayBuffer(msg);
+    },
+    execute(cmd) {
+      if (this.debug && cmd.type !== 5){
+        this.debugInfo.lastCommand = cmd;
       }
 
-      if (cmd.type === 'stats') {
-        this.clients = cmd.clients;
+      if (cmd.type === 2) { // stats
+        this.clients = cmd.params[0];
         return;
       }
 
-      if(cmd.type === 'debug'){
-        this.debugInfo.totalChunks = cmd.totalChunks;
-        this.debugInfo.loadedChunks = cmd.loadedChunks;
-        this.debugInfo.length = cmd.length;
-        this.debugInfo.chunkSize = cmd.chunkSize;
-      }
-      if (cmd.type === 'cursor'){
-        this.cursors.set(cmd.sender, cmd.pos);
-        this.draw();
+      if(cmd.type === 5){ // debug
+        this.debugInfo.length = cmd.params[0];
+        this.debugInfo.totalChunks = cmd.params[1];
+        this.debugInfo.loadedChunks = cmd.params[2];
+        this.debugInfo.chunkSize = cmd.params[3];
         return;
       }
-      if(cmd.type === 'data') {
-        if(cmd.start > this.loadedLength) return;
-        const text = this.content;
-        const lengthDiff = cmd.data.length - cmd.end + cmd.start;
-        if(cmd.flags === 'load'){
+
+      if(cmd.type === 0 || cmd.type === 6) { // data, fetch response
+        const start = cmd.params[0];
+        const end = cmd.params[1];
+        if(start > this.content.end) return;
+        const lengthDiff = cmd.data.length - end + start;
+        if(cmd.type === 6){
           this.canLoad = true;
         }
-        this.loadedLength += lengthDiff;
-        this.moveCursors(cmd.end, lengthDiff);
-        this.content = text.substring(0, cmd.start) + cmd.data + text.substring(cmd.end)
-        this.draw(cmd.flags === 'load' || cmd.flags === 'load last');
+        this.moveCursors(end, lengthDiff);
+        this.content.data.copyWithin(start+lengthDiff, start, this.content.length);
+        this.content.data.set(cmd.data, start);
+        this.content.end += lengthDiff;
+        this.draw(cmd.type === 6);
+        return;
+      }
+
+      if(cmd.type === 3){
+        this.cursors.set(cmd.params[1], cmd.params[0]);
+        this.draw();
+        return;
       }
     },
     moveCursors(pos, diff){
@@ -305,13 +340,25 @@ export default {
     },
     toggleDebug(){
       this.debug = !this.debug;
-      this.ws.send(JSON.stringify(
-          {
-            type: 'toggle debug',
-            value: this.debug
-          }
-      ));
+      this.send(4, [this.debug?1:0]);
       this.$nextTick(() => this.onresize());
+    },
+    getByteLength(str){
+      return new TextEncoder().encode(str).length;
+    },
+    getCharLength(buf){
+      return new TextDecoder().decode(buf).length;
+    },
+    getCharFromBytePosition(byteOffset, charOffset){
+      const dec = new TextDecoder();
+      if(charOffset >= 0){
+        const sliced = this.content.data.slice(byteOffset, byteOffset+charOffset*4+4);
+        const text = dec.decode(sliced);
+        return text[charOffset];
+      }
+      const sliced = this.content.data.slice(Math.max(0,byteOffset+charOffset*4-4), byteOffset);
+      const text = dec.decode(sliced);
+      return text[text.length + charOffset];
     }
   }
 }
@@ -370,5 +417,9 @@ canvas{
 
 .debug-info{
   padding: 10px 0;
+}
+
+.input{
+  opacity: 0;
 }
 </style>
