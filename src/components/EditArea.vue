@@ -129,9 +129,10 @@ export default {
           const text = decoder.decode(this.content.data.subarray(lineStart, lineEnd));
           this.g.fillText(text, 0, i * lineHeight - this.scroll);
           for (const [k, c] of this.cursors.entries()) {
-            if (c - lineStart <= text.length) {
+            if (c >= lineStart && c <= lineEnd) {
+              const cherLen = this.getCharLength(this.content.data.subarray(lineStart, c));
               this.g.fillStyle = k===0?'green':'orange';
-              this.g.fillRect((c - lineStart) * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
+              this.g.fillRect(cherLen * this.fontWidth, i * lineHeight - this.scroll, 5, lineHeight);
             }
           }
           lineStart = lineEnd + 1;
@@ -201,45 +202,36 @@ export default {
         input.selectionEnd = 1;
       }
     },
-    onclick(/*e*/){
+    onclick(e){
       const input = this.$refs.input;
       input.value = "xy";
       input.focus();
       input.selectionStart = 1;
       input.selectionEnd = 1;
-      // const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
-      // const col = Math.floor(e.offsetX/this.fontWidth);
-      // let rowStart = 0;
-      // let rowEnd = this.content.indexOf('\n', rowStart+1);
-      // if(rowEnd === -1) rowEnd = this.content.length;
-      // for(let i = 0; i < row;i++){
-      //   if(rowStart === -1){
-      //     this.cursors.set(0, this.content.length);
-      //     this.draw();
-      //     this.ws.send(JSON.stringify(
-      //         {
-      //           type: 'cursor',
-      //           pos: this.cursors.get(0)
-      //         }
-      //     ));
-      //     return;
-      //   }
-      //   rowStart = rowEnd;
-      //   rowEnd = this.content.indexOf('\n', rowStart+1);
-      //   if(rowEnd === -1) rowEnd = this.content.length;
-      // }
-      // if(rowStart+col < rowEnd){
-      //   this.cursors.set(0, rowStart+col);
-      // } else {
-      //   this.cursors.set(0, rowEnd);
-      // }
-      // this.ws.send(JSON.stringify(
-      //     {
-      //       type: 'cursor',
-      //       pos: this.cursors.get(0)
-      //     }
-      // ));
-      // this.draw();
+      const row = Math.floor((e.offsetY+this.scroll)/this.lineHeight);
+      const col = Math.floor(e.offsetX/this.fontWidth);
+      let rowStart = 0;
+      let rowEnd = this.content.data.indexOf(10, rowStart);
+      if(rowEnd === -1) rowEnd = this.content.length;
+      for(let i = 0; i < row;i++){
+        if(rowStart === -1){
+          this.cursors.set(0, this.content.end);
+          this.draw();
+          this.send(3, [this.content.end]);
+          return;
+        }
+        rowStart = rowEnd+1;
+        rowEnd = this.content.data.indexOf(10, rowStart);
+        if(rowEnd === -1) rowEnd = this.content.length;
+      }
+      if(rowStart+col < rowEnd){
+        const text = new TextDecoder().decode(this.content.data.subarray(rowStart, rowEnd));
+        this.cursors.set(0, this.content.start + rowStart+this.getByteLength(text.substring(0, col)));
+      } else {
+        this.cursors.set(0, this.content.start + rowEnd);
+      }
+      this.send(3, [this.cursors.get(0)]);
+      this.draw();
     },
     onresize(){
       this.canvas.width = this.$refs.ccontainer.offsetWidth;
@@ -353,6 +345,9 @@ export default {
     },
     getByteLength(str){
       return new TextEncoder().encode(str).length;
+    },
+    getCharLength(buf){
+      return new TextDecoder().decode(buf).length;
     },
     getCharFromBytePosition(byteOffset, charOffset){
       const dec = new TextDecoder();
