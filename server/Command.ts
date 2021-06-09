@@ -23,12 +23,10 @@ export class Command{
                 return new CursorCommand(cmd);
             case Type.Data:
                 return new DataCommand(cmd);
-            // case Type.Stats:
-            //     return new StatsCommand(obj.clients);
             case Type.Fetch:
                 return new FetchCommand(cmd);
-            // case Type.ToggleDebug:
-            //     return new ToggleDebugCommand(obj.value);
+            case Type.ToggleDebug:
+                return new ToggleDebugCommand(cmd);
         }
         return null;
     }
@@ -60,6 +58,13 @@ export class StatsCommand extends Command{
     constructor(clients: number) {
         super(Type.Stats);
         this.clients = clients;
+    }
+
+    serialize(): Buffer {
+        const buf = Buffer.allocUnsafe(5);
+        buf.writeUInt8(Type.Stats);
+        buf.writeUInt32BE(this.clients, 1);
+        return buf;
     }
 }
 
@@ -117,9 +122,9 @@ export class FetchCommand extends Command{
 
 export class ToggleDebugCommand extends Command{
     value: boolean;
-    constructor(value: boolean) {
+    constructor(buf: Buffer) {
         super(Type.ToggleDebug);
-        this.value = value;
+        this.value = buf.readUInt32BE(0) !== 0;
     }
 }
 
@@ -134,5 +139,15 @@ export class DebugCommand extends Command{
         this.totalChunks = totalChunks;
         this.loadedChunks = loadedChunks;
         this.chunkSize = chunkSize;
+    }
+
+    serialize(): Buffer {
+        const buf = Buffer.allocUnsafe(17);
+        buf.writeUInt8(Type.Debug);
+        buf.writeUInt32BE(this.length, 1);
+        buf.writeUInt32BE(this.totalChunks, 5);
+        buf.writeUInt32BE(this.loadedChunks, 9);
+        buf.writeUInt32BE(this.chunkSize, 13);
+        return buf;
     }
 }

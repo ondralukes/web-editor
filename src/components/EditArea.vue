@@ -21,9 +21,9 @@
         <span class="action debug" @click="toggleDebug">Debug</span>
       </h3>
       <div v-if="debug" class="debug-info">
-        Last received: {{ debugInfo.lastCommand }}
+        Last received: {{ JSON.stringify(debugInfo.lastCommand) }}
         <br>
-        Loaded length: {{ loadedLength }}
+        Content range: {{ this.content.start }} ~ {{ this.content.end}} (length {{this.content.length}})
         <br>
         Server:
         <br>
@@ -75,11 +75,10 @@ export default {
       fontWidth: null,
       lineHeight: 16,
       cursors: new Map([[0, 0]]),
-      loadedLength: 0,
       canLoad: true,
       debug: false,
       debugInfo: {
-        lastCommand: '',
+        lastCommand: null,
         totalChunks: 0,
         loadedChunks: 0,
         chunkSize: 0,
@@ -285,6 +284,8 @@ export default {
         let paramCount = 0;
         if(result.type === 0 || result.type === 1 || result.type === 6) paramCount = 2; // data, fetch, fetch response
         if(result.type === 3) paramCount = 2; // cursor
+        if(result.type === 2) paramCount = 1; // stats
+        if(result.type === 5) paramCount = 4; // debug
         for(let i = 0;i<paramCount;i++){
           result.params.push(view.getUint32(offset));
           offset += 4;
@@ -295,36 +296,29 @@ export default {
       reader.readAsArrayBuffer(msg);
     },
     execute(cmd) {
-      // this.decode(msg);
-      // if (typeof msg !== "string") return;
-      // const cmd = JSON.parse(msg);
-      // if (this.debug && cmd.type !== 'debug'){
-      //   this.debugInfo.lastCommand = msg;
-      // }
-      //
-      // if (cmd.type === 'stats') {
-      //   this.clients = cmd.clients;
-      //   return;
-      // }
-      //
-      // if(cmd.type === 'debug'){
-      //   this.debugInfo.totalChunks = cmd.totalChunks;
-      //   this.debugInfo.loadedChunks = cmd.loadedChunks;
-      //   this.debugInfo.length = cmd.length;
-      //   this.debugInfo.chunkSize = cmd.chunkSize;
-      // }
-      // if (cmd.type === 'cursor'){
-      //   this.cursors.set(cmd.sender, cmd.pos);
-      //   this.draw();
-      //   return;
-      // }
+      if (this.debug && cmd.type !== 5){
+        this.debugInfo.lastCommand = cmd;
+      }
+
+      if (cmd.type === 2) { // stats
+        this.clients = cmd.params[0];
+        return;
+      }
+
+      if(cmd.type === 5){ // debug
+        this.debugInfo.length = cmd.params[0];
+        this.debugInfo.totalChunks = cmd.params[1];
+        this.debugInfo.loadedChunks = cmd.params[2];
+        this.debugInfo.chunkSize = cmd.params[3];
+        return;
+      }
+
       if(cmd.type === 0 || cmd.type === 6) { // data, fetch response
         const start = cmd.params[0];
         const end = cmd.params[1];
         if(start > this.content.end) return;
         const lengthDiff = cmd.data.length - end + start;
         if(cmd.type === 6){
-          console.log('fetch ready');
           this.canLoad = true;
         }
         this.moveCursors(end, lengthDiff);
@@ -334,6 +328,7 @@ export default {
         this.draw(cmd.type === 6);
         return;
       }
+
       if(cmd.type === 3){
         this.cursors.set(cmd.params[1], cmd.params[0]);
         this.draw();
@@ -353,12 +348,7 @@ export default {
     },
     toggleDebug(){
       this.debug = !this.debug;
-      this.ws.send(JSON.stringify(
-          {
-            type: 'toggle debug',
-            value: this.debug
-          }
-      ));
+      this.send(4, [this.debug?1:0]);
       this.$nextTick(() => this.onresize());
     },
     getByteLength(str){
