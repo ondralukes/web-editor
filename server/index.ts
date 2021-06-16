@@ -32,6 +32,8 @@ app.get('/download/:code', (req: Request, res: Response) => {
         res.end();
         return;
     }
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.code}.txt"`);
     doc.writeToStream(res);
     res.end();
 });

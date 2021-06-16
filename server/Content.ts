@@ -69,55 +69,67 @@ export default class Content {
         if (diff == 0) {
             this.write(data, offset);
             return;
-        } else if (diff < 0) {
-            let [n, firstChunkOffset] = this.getChunkOffset(offset);
-            let written = 0;
-            let c = this.getChunk(n);
-            let chunkOffset = c.write(data, firstChunkOffset, 0, !this.chunkExists(n + 1));
-            written += chunkOffset;
-            chunkOffset += firstChunkOffset;
-            this.chunkLengths[n] = c.length;
-            while (written != data.length) {
-                n++;
+        }
+
+        // Save leftover from the last chunk of the replaced range
+        // Starting from start chunk, write all data
+        // Append leftover
+        // Empty unused chunks till end chunk
+
+        let [startN, startOffset] = this.getChunkOffset(offset);
+        let endOffset = startOffset + replaceLength;
+        let endN = startN + Math.floor(endOffset/this.chunkSize);
+        endOffset %= this.chunkSize;
+        const endChunk = this.getChunk(endN);
+        const leftover = Buffer.allocUnsafe(endChunk.length-endOffset);
+        endChunk.copyTo(leftover, 0, endOffset, endChunk.length);
+        let toWrite = leftover.length+data.length;
+        let off = 0;
+        let n = startN;
+        let coff = startOffset;
+        while(toWrite > 0){
+            if(n == endN+1){
                 const c = this.getChunk(n);
-                chunkOffset = c.write(data, 0, written, !this.chunkExists(n + 1));
-                written += chunkOffset;
-                this.chunkLengths[n] = c.length;
-            }
-            let toRemove = -diff;
-            while (toRemove != 0) {
-                const c = this.getChunk(n);
-                toRemove -= c.remove(chunkOffset, toRemove);
-                this.chunkLengths[n] = c.length;
-                chunkOffset = 0;
-                n++;
-            }
-        } else {
-            let [n, chunkOffset] = this.getChunkOffset(offset);
-            const currentChunk = this.getChunk(n);
-            const overflow = this.chunkLengths[n] + diff - this.chunkSize;
-            if (overflow > 0) {
-                const overflowBuffer = Buffer.allocUnsafe(overflow);
-                currentChunk.copyTo(
-                    overflowBuffer,
-                    0,
-                    this.chunkLengths[n] - overflow,
-                    this.chunkLengths[n]);
-                let overflowChunk;
-                // Try to put overflow to next chunk
-                if(this.chunkSize - this.chunkLengths[n+1] >= overflow){
-                    overflowChunk = this.getChunk(n+1);
-                    overflowChunk.shift(0, overflow);
+                if(this.chunkSize-c.length >= toWrite){
+                    c.shift(0, toWrite);
+                    if(toWrite > leftover.length){
+                        const wrt = c.write(data, coff, off, true);
+                        coff += wrt;
+                    }
+                    c.write(leftover, coff, 0, true);
+                    this.chunkLengths[n] = c.length;
+                    n++;
+                    break;
                 } else {
-                    this.insertChunk(n + 1);
-                    overflowChunk = this.getChunk(n + 1);
+                    this.insertChunk(n);
+                    endN++;
                 }
-                overflowChunk.write(overflowBuffer, 0, 0, true);
-                this.chunkLengths[n + 1] = overflowChunk.length;
             }
-            currentChunk.shift(chunkOffset, diff);
-            this.chunkLengths[n] = currentChunk.length;
-            this.write(data, offset);
+            const c = this.getChunk(n);
+            c.empty();
+
+            if(toWrite > leftover.length){
+                const wrt = c.write(data, coff, off, true);
+                toWrite -= wrt;
+                off += wrt;
+                coff += wrt;
+                if(toWrite <= leftover.length) off = 0;
+            } else {
+                const wrt = c.write(leftover, coff, off, true);
+                off += wrt;
+                toWrite -= wrt;
+                coff += wrt;
+            }
+            this.chunkLengths[n] = c.length;
+            if(coff === this.chunkSize){
+                n++;
+                coff = 0;
+            }
+        }
+
+        for(let i = n+1;i<=endN;i++){
+            this.getChunk(i).empty();
+            this.chunkLengths[i] = 0;
         }
     }
 
@@ -148,7 +160,11 @@ export default class Content {
         console.log(`Content ${this.name}, length ${this.length}`);
         for (let i = 0; i < this.chunkLengths.length; i++) {
             const len = this.chunkLengths[i];
-            const val = this.getChunk(i).toString();
+            const c = this.getChunk(i);
+            const val = c.toString();
+            if(len != c.length){
+                console.warn(`chunk length corrputed at ${i} p${c.length}!=g${len}`);
+            }
             console.log(`chunk ${i}, len=${len}: ${val.substring(0, 10)}...${val.slice(-10)}`);
         }
     }
@@ -192,25 +208,39 @@ export default class Content {
 
     consolidate(){
         const prev = this.chunkLengths.length;
-        const buffer = Buffer.allocUnsafe(this.chunkSize);
-        let offset = 0;
-        let chunk = 0;
-        while(offset != this.length) {
-            const len = Math.min(this.chunkSize, this.length-offset);
-            this.read(buffer, offset, len);
-            this.getChunk(chunk).write(buffer, 0, 0, true);
-            this.chunkLengths[chunk] = len;
-            offset += len;
-            chunk++;
+        const buffer = Buffer.allocUnsafe(2*this.chunkSize);
+        let bufferLength = 0;
+        let inputChunk = 0;
+        let outputChunk = 0;
+        while(true){
+            while (bufferLength < this.chunkSize && this.chunkExists(inputChunk)){
+                const c = this.getChunk(inputChunk);
+                c.copyTo(buffer, bufferLength, 0, c.length);
+                bufferLength += c.length;
+                inputChunk++;
+            }
+            const oc = this.getChunk(outputChunk);
+            oc.empty();
+            if(bufferLength < this.chunkSize){
+                oc.write(buffer.subarray(0, bufferLength), 0, 0, true);
+                this.chunkLengths[outputChunk] = oc.length;
+                outputChunk++;
+                break;
+            }
+            oc.write(buffer.subarray(0, this.chunkSize), 0, 0, true);
+            this.chunkLengths[outputChunk] = oc.length;
+            buffer.copy(buffer, 0, this.chunkSize, bufferLength);
+            bufferLength -= this.chunkSize;
+            outputChunk++;
         }
-        for (let i = chunk; i < this.chunkLengths.length; i++) {
+        for (let i = outputChunk; i < this.chunkLengths.length; i++) {
             const filename = `files/${this.name}/${i}`;
             if(fs.existsSync(filename))
                 fs.unlinkSync(filename);
             this.chunks.delete(i);
         }
-        this.chunkLengths.splice(chunk);
-        console.log(`Consolidated ${this.name} : ${prev} => ${chunk}`);
+        this.chunkLengths.splice(outputChunk);
+        console.log(`Consolidated ${this.name} : ${prev} => ${outputChunk}`);
     }
 
     private getChunkOffset(offset: number) {
@@ -264,6 +294,11 @@ class Chunk {
         this.lastUsed = Date.now();
     }
 
+    empty(){
+        this.length = 0;
+        this.lastUsed = Date.now();
+    }
+
     copyTo(buf: Buffer, targetOffset: number, sourceOffset: number, sourceEnd: number) {
         this.lastUsed = Date.now();
         return this.buf.copy(buf, targetOffset, sourceOffset, Math.min(this.length, sourceEnd));
@@ -283,10 +318,11 @@ class Chunk {
     remove(start: number, length: number) {
         this.lastUsed = Date.now();
         if (start + length > this.length) {
-            length = this.length - start;
+            const removed = this.length - start;
+            this.length = start;
+            return removed;
         }
-        const count = this.length - start - length;
-        this.buf.copy(this.buf, start, start + length, start + length + count);
+        this.buf.copy(this.buf, start, start + length, this.length);
         this.length -= length;
         return length;
     }

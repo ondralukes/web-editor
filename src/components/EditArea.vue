@@ -76,6 +76,7 @@ export default {
       lineHeight: 16,
       cursors: new Map([[0, 0]]),
       canLoad: true,
+      inplaceFetch: false,
       debug: false,
       debugInfo: {
         lastCommand: null,
@@ -128,7 +129,8 @@ export default {
           if(lineEnd === -1) lineEnd = this.content.length;
           const text = decoder.decode(this.content.data.subarray(lineStart, lineEnd));
           this.g.fillText(text, 0, i * lineHeight - this.scroll);
-          for (const [k, c] of this.cursors.entries()) {
+          for (let [k, c] of this.cursors.entries()) {
+            c -= this.content.start;
             if (c >= lineStart && c <= lineEnd) {
               const cherLen = this.getCharLength(this.content.data.subarray(lineStart, c));
               this.g.fillStyle = k===0?'green':'orange';
@@ -156,8 +158,11 @@ export default {
       if(!v.startsWith('x')){
         if(cursor === 0) return;
         const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, -1))
-        this.content.data.copyWithin(cursor-removedLength, cursor, this.content.length);
+        this.content.data.copyWithin(
+            cursor-removedLength-this.content.start,
+            cursor-this.content.start, this.content.length);
         this.content.end -= removedLength;
+        this.handleContentBufferOverflow();
         this.draw();
         this.send(0, [cursor-1, cursor]);
         this.moveCursors(cursor, -removedLength);
@@ -166,19 +171,31 @@ export default {
       if(!v.endsWith('y')){
         if(cursor === this.content.length) return;
         const removedLength = this.getByteLength(this.getCharFromBytePosition(cursor, 0));
-        this.content = this.content.slice(0,  cursor) + this.content.substring(cursor+1);
-        this.content.data.copyWithin(cursor, cursor+removedLength, this.content.length);
+        this.content =
+            this.content.slice(0,  cursor-this.content.start)
+            + this.content.substring(cursor+1-this.content.start);
+        this.content.data.copyWithin(
+            cursor-this.content.start,
+            cursor+removedLength-this.content.start,
+            this.content.length);
         this.content.end -= removedLength;
+        this.handleContentBufferOverflow();
         this.draw();
         this.send(0, [cursor, cursor+1]);
         return;
       }
       v = v.slice(1, -1);
       const insertLength = this.getByteLength(v);
-      this.content.data.copyWithin(cursor+insertLength, cursor, this.content.length);
-      const target = this.content.data.subarray(cursor, cursor+insertLength);
+      this.content.data.copyWithin(
+          cursor+insertLength-this.content.start,
+          cursor-this.content.start,
+          this.content.length);
+      const target = this.content.data.subarray(
+          cursor-this.content.start,
+          cursor+insertLength-this.content.start);
       new TextEncoder().encodeInto(v, target);
       this.content.end += insertLength;
+      this.handleContentBufferOverflow();
       this.moveCursors(cursor, insertLength);
       this.send(0, [cursor, cursor], target);
       this.draw();
@@ -306,17 +323,29 @@ export default {
       }
 
       if(cmd.type === 0 || cmd.type === 6) { // data, fetch response
-        const start = cmd.params[0];
-        const end = cmd.params[1];
-        if(start > this.content.end) return;
+        const start = cmd.params[0] - this.content.start;
+        const end = cmd.params[1] - this.content.start;
+        if(start > this.content.length) return;
         const lengthDiff = cmd.data.length - end + start;
         if(cmd.type === 6){
           this.canLoad = true;
+          if(this.inplaceFetch){
+            this.content.data.set(cmd.data, start);
+            this.draw(cmd.type === 6);
+            this.inplaceFetch = false;
+            return;
+          }
         }
         this.moveCursors(end, lengthDiff);
+        if(start < 0){
+          this.content.start += lengthDiff;
+          this.content.end += lengthDiff;
+          return;
+        }
         this.content.data.copyWithin(start+lengthDiff, start, this.content.length);
         this.content.data.set(cmd.data, start);
         this.content.end += lengthDiff;
+        this.handleContentBufferOverflow();
         this.draw(cmd.type === 6);
         return;
       }
@@ -331,6 +360,24 @@ export default {
       for(let [key, value] of this.cursors.entries()){
         if (value >= pos)
           this.cursors.set(key, value + diff);
+      }
+    },
+    handleContentBufferOverflow(){
+      // overflow
+      if(this.content.length >= 30720+4096){
+        let shift = this.content.length-30720;
+        this.content.data.copyWithin(0, shift, this.content.length);
+        this.content.start += shift;
+      }
+
+      // underflow
+      if(this.content.length < 30720-4096 && this.content.start !== 0){
+        const shift = 30720-this.content.length;
+        this.content.data.copyWithin(shift, 0, this.content.length);
+        this.content.start -= shift;
+        this.canLoad = false;
+        this.inplaceFetch = true;
+        this.send(1, [this.content.start, shift]);
       }
     },
     disconnect() {
@@ -350,6 +397,7 @@ export default {
       return new TextDecoder().decode(buf).length;
     },
     getCharFromBytePosition(byteOffset, charOffset){
+      byteOffset -= this.content.start;
       const dec = new TextDecoder();
       if(charOffset >= 0){
         const sliced = this.content.data.slice(byteOffset, byteOffset+charOffset*4+4);
