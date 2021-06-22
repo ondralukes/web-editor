@@ -257,7 +257,18 @@ export default {
     },
     onscroll(e){
       this.scroll += e.deltaY;
-      if(this.scroll < 0) this.scroll = 0;
+      if(this.scroll < 0){
+        this.scroll = 0;
+        const shift = this.content.start<4096?this.content.start:4096;
+        this.content.start -= shift;
+        this.content.end -= shift;
+        this.content.data.copyWithin(shift, 0, this.content.length-shift);
+        if(shift !== 0) {
+          this.canLoad = false;
+          this.inplaceFetch = true;
+          this.send(1, [this.content.start, shift]);
+        }
+      }
       if(this.scroll > this.maxScroll) this.scroll = this.maxScroll;
       this.draw();
     },
@@ -331,6 +342,8 @@ export default {
           this.canLoad = true;
           if(this.inplaceFetch){
             this.content.data.set(cmd.data, start);
+            const fetchedLines = cmd.data.reduce((acc, cur) => acc + (cur===10?1:0), 0);
+            this.scroll += fetchedLines*this.lineHeight;
             this.draw(cmd.type === 6);
             this.inplaceFetch = false;
             return;
@@ -465,6 +478,7 @@ canvas{
 
 .debug-info{
   padding: 10px 0;
+  overflow-x: hidden;
 }
 
 .input{
