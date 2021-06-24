@@ -35,6 +35,8 @@
         <br>
         avg. chunk utilization: {{ ((debugInfo.length/debugInfo.totalChunks)/debugInfo.chunkSize*100).toFixed(2)}}%
         <br>
+        <a class="action download" :href="`download/${code}?annotate=yes`">Download with annotations</a>
+        <br>
       </div>
     </div>
     <div class="canvas-container" ref="ccontainer">
@@ -259,14 +261,16 @@ export default {
       this.scroll += e.deltaY;
       if(this.scroll < 0){
         this.scroll = 0;
-        const shift = this.content.start<4096?this.content.start:4096;
-        this.content.start -= shift;
-        this.content.end -= shift;
-        this.content.data.copyWithin(shift, 0, this.content.length-shift);
-        if(shift !== 0) {
-          this.canLoad = false;
-          this.inplaceFetch = true;
-          this.send(1, [this.content.start, shift]);
+        if(!this.inplaceFetch) {
+          const shift = this.content.start < 4096 ? this.content.start : 4096;
+          this.content.start -= shift;
+          this.content.end -= shift;
+          this.content.data.copyWithin(shift, 0, this.content.length - shift);
+          if (shift !== 0) {
+            this.canLoad = false;
+            this.inplaceFetch = true;
+            this.send(1, [this.content.start, shift]);
+          }
         }
       }
       if(this.scroll > this.maxScroll) this.scroll = this.maxScroll;

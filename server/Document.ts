@@ -59,8 +59,8 @@ export default class Document{
         this.broadcast(cmd);
     }
 
-    writeToStream(stream: Writable){
-        this.content.writeToStream(stream);
+    writeToStream(stream: Writable, annotate?: boolean){
+        this.content.writeToStream(stream, annotate);
     }
 
     private broadcast(cmd: Command){

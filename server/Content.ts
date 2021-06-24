@@ -95,8 +95,9 @@ export default class Content {
                     if(toWrite > leftover.length){
                         const wrt = c.write(data, coff, off, true);
                         coff += wrt;
+                        off = 0;
                     }
-                    c.write(leftover, coff, 0, true);
+                    c.write(leftover, coff, off, true);
                     this.chunkLengths[n] = c.length;
                     n++;
                     break;
@@ -149,10 +150,16 @@ export default class Content {
             this.length = offset + data.length;
     }
 
-    writeToStream(stream: Writable){
+    writeToStream(stream: Writable, annotate?: boolean){
         for(let i = 0;i<this.chunkLengths.length;i++){
+            if(annotate){
+                stream.write(`:#${i},l=${this.chunkLengths[i]}>`);
+            }
             const chunk = this.getChunk(i);
             stream.write(chunk.buf.subarray(0, this.chunkLengths[i]));
+            if(annotate){
+                stream.write(`<#${i},l=${this.chunkLengths[i]}:`);
+            }
         }
     }
 
